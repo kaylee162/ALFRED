@@ -109,10 +109,9 @@ function App() {
           </div>
 
           <div className="title-group">
-            <p className="system-kicker">adaptive learning framework</p>
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Desktop command assistant for projects, files, notes, and workflows.
+            Adaptive Learning Framework for Responsive Executive Decisions V.2
             </p>
           </div>
 
