@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   CalendarDays,
+  ChevronDown,
   Cpu,
   FolderOpen,
   Radio,
@@ -10,6 +11,7 @@ import {
   Sparkles,
   Terminal,
 } from "lucide-react";
+
 import "./App.css";
 
 type CalendarEvent = {
@@ -64,6 +66,243 @@ function ClockPanel() {
   );
 }
 
+function parseCalendarResponse(response: string) {
+  const isDailyCalendar =
+    response.startsWith("Here’s your calendar for") ||
+    response.startsWith("No events") ||
+    response.startsWith("You have nothing on your calendar");
+
+  const isWeeklyCalendar = response.startsWith("Weekly Calendar Overview");
+
+  if (!isDailyCalendar && !isWeeklyCalendar) return null;
+
+    if (isWeeklyCalendar) {
+    const lines = response.split("\n");
+
+    const weekItems: {
+      date: string;
+      dateShort: string;
+      weekday: string;
+      countText: string;
+      events: {
+        time: string;
+        title: string;
+        location?: string;
+      }[];
+    }[] = [];
+
+    let currentDay: (typeof weekItems)[number] | null = null;
+
+    lines.forEach((rawLine) => {
+      const line = rawLine.trim();
+
+      const dayMatch = line.match(
+        /^•\s*(\d{4}-\d{2}-\d{2})\s*—\s*(\d+ events?)/i
+      );
+
+      if (dayMatch) {
+        const date = dayMatch[1];
+        const countText = dayMatch[2];
+
+        const parsedDate = new Date(`${date}T12:00:00`);
+
+        currentDay = {
+          date,
+          dateShort: parsedDate.toLocaleDateString([], {
+            month: "2-digit",
+            day: "2-digit",
+          }),
+          weekday: parsedDate.toLocaleDateString([], {
+            weekday: "long",
+          }),
+          countText,
+          events: [],
+        };
+
+        weekItems.push(currentDay);
+        return;
+      }
+
+      if (!currentDay) return;
+
+      const eventMatch = line.match(/^-\s*(.+?)\s*—\s*(.+)$/);
+
+      if (eventMatch) {
+        const time = eventMatch[1];
+        const rest = eventMatch[2];
+
+        if (rest.toLowerCase() === "no events") return;
+
+        const [title, location] = rest.split(" at ");
+
+        currentDay.events.push({
+          time,
+          title: title || "Untitled",
+          location,
+        });
+      }
+    });
+
+    const summaryItems = lines
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("•") && line.includes(":") && !line.includes("—"))
+      .map((line) => line.replace("•", "").trim());
+
+    return {
+      type: "weekly" as const,
+      title: "Weekly Calendar Overview",
+      events: [],
+      weekItems,
+      summaryItems,
+    };
+  }
+
+  if (
+    response.startsWith("No events") ||
+    response.startsWith("You have nothing")
+  ) {
+    return {
+      type: "daily" as const,
+      title: response,
+      events: [],
+      weekItems: [],
+      summaryItems: [],
+    };
+  }
+
+  const [heading, ...lines] = response.split("\n");
+
+  const events = lines
+    .filter((line) => line.trim().startsWith("•"))
+    .map((line) => {
+      const clean = line.replace(/^[-•]\s*/, "").trim();
+      const [time, rest] = clean.split(" — ");
+      const [title, location] = rest?.split(" at ") ?? ["Untitled"];
+
+      return {
+        time: time || "All day",
+        title: title || "Untitled",
+        location,
+      };
+    });
+
+  return {
+    type: "daily" as const,
+    title: heading,
+    events,
+    weekItems: [],
+    summaryItems: [],
+  };
+}
+
+function ChatCalendarResponse({ response }: { response: string }) {
+  const parsed = parseCalendarResponse(response);
+  const [openDayIndex, setOpenDayIndex] = useState<number | null>(null);
+
+  if (!parsed) {
+    return <p>{response}</p>;
+  }
+
+  if (parsed.type === "weekly") {
+    return (
+      <div className="chat-calendar-card">
+        <div className="chat-calendar-header centered">
+          <div>
+            <p className="panel-label">calendar response</p>
+            <h3>Week Overview</h3>
+          </div>
+          <CalendarDays size={18} />
+        </div>
+
+        <div className="chat-week-list">
+          {parsed.weekItems.map((day, index) => {
+            const isOpen = openDayIndex === index;
+
+            return (
+              <div className="chat-week-day" key={day.date}>
+                <div className="chat-week-row">
+                  <span className="chat-week-date">{day.dateShort}</span>
+                  <strong className="chat-week-name">{day.weekday}</strong>
+
+                  <button
+                    className={`chat-week-toggle ${isOpen ? "open" : ""}`}
+                    onClick={() => setOpenDayIndex(isOpen ? null : index)}
+                    type="button"
+                  >
+                    <span>{day.countText}</span>
+                    <ChevronDown size={15} />
+                  </button>
+                </div>
+
+                {isOpen && (
+                  <div className="chat-week-dropdown">
+                    {day.events.length === 0 ? (
+                      <small>No events for {day.weekday}.</small>
+                    ) : (
+                      day.events.map((event, eventIndex) => (
+                        <div className="chat-week-event-row" key={eventIndex}>
+                          <span>{event.time}</span>
+                          <strong>{event.title}</strong>
+                          {event.location && <small>{event.location}</small>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {parsed.summaryItems.length > 0 && (
+          <div className="chat-week-summary">
+            <span>Summary</span>
+            {parsed.summaryItems.map((item, index) => (
+              <small key={index}>{item}</small>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const displayTitle = parsed.title
+    .replace("Here’s your calendar for ", "")
+    .replace(":", "");
+
+  return (
+    <div className="chat-calendar-card">
+      <div className="chat-calendar-header centered">
+        <div>
+          <p className="panel-label">calendar response</p>
+          <h3>{displayTitle}</h3>
+        </div>
+        <CalendarDays size={18} />
+      </div>
+
+      {parsed.events.length === 0 ? (
+        <div className="chat-calendar-empty">
+          <span>{parsed.title}</span>
+          <small>Your schedule is clear for this window.</small>
+        </div>
+      ) : (
+        <div className="chat-calendar-list">
+          {parsed.events.map((event, index) => (
+            <div className="chat-calendar-event" key={index}>
+              <div className="chat-calendar-time">{event.time}</div>
+
+              <div className="chat-calendar-details">
+                <strong>{event.title}</strong>
+                {event.location && <small>{event.location}</small>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [command, setCommand] = useState("");
   const [response, setResponse] = useState("Systems online. Awaiting command.");
@@ -71,7 +310,7 @@ function App() {
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarStatus, setCalendarStatus] = useState("calendar not checked");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [tomorrowPlan, setTomorrowPlan] = useState<TomorrowPlan | null>(null);
+  const [tomorrowPlan] = useState<TomorrowPlan | null>(null);
 
   async function submitCommand() {
     if (!command.trim()) return;
@@ -95,32 +334,6 @@ function App() {
     }
   }
 
-  async function connectCalendar() {
-    setCalendarStatus("connecting...");
-
-    try {
-      const res = await fetch(`${API_BASE}/calendar/connect`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || "Calendar connection failed");
-      }
-
-      setCalendarConnected(true);
-      setCalendarStatus("calendar connected");
-      setResponse(data.message || "Google Calendar connected.");
-      loadUpcomingEvents();
-    } catch (error) {
-      setCalendarConnected(false);
-      setCalendarStatus("calendar offline");
-      setResponse(
-        error instanceof Error
-          ? error.message
-          : "Could not connect Google Calendar."
-      );
-    }
-  }
-
   async function loadUpcomingEvents() {
     try {
       const res = await fetch(`${API_BASE}/calendar/upcoming?days=7&max_results=5`);
@@ -135,30 +348,6 @@ function App() {
       setCalendarStatus("calendar synced");
     } catch {
       setCalendarStatus("calendar offline");
-    }
-  }
-
-  async function loadTomorrowPlan() {
-    setResponse("Generating tomorrow's plan...");
-
-    try {
-      const res = await fetch(`${API_BASE}/calendar/plan/tomorrow`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || "Could not generate tomorrow plan");
-      }
-
-      setTomorrowPlan(data);
-      setCalendarConnected(true);
-      setCalendarStatus("calendar synced");
-      setResponse("Tomorrow's planning summary is ready.");
-    } catch (error) {
-      setResponse(
-        error instanceof Error
-          ? error.message
-          : "Could not generate tomorrow's plan."
-      );
     }
   }
 
@@ -240,7 +429,7 @@ function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") submitCommand();
                 }}
-                placeholder='Try: "What should I focus on tomorrow?"'
+                placeholder='Try: "Whats on my calendar today?"'
               />
               <button onClick={submitCommand} aria-label="Send command">
                 <Send size={18} />
@@ -248,15 +437,9 @@ function App() {
             </div>
           </div>
 
-          <div className="calendar-actions">
-            <button onClick={connectCalendar}>Connect Calendar</button>
-            <button onClick={loadUpcomingEvents}>Upcoming Events</button>
-            <button onClick={loadTomorrowPlan}>Plan Tomorrow</button>
-          </div>
-
           <div className="response-console">
             <p className="panel-label">system response</p>
-            <p>{response}</p>
+            <ChatCalendarResponse response={response} />
           </div>
 
           {tomorrowPlan && (
@@ -298,24 +481,46 @@ function App() {
         <aside className="side-panel right-panel">
           <ClockPanel />
 
-          <div className="panel-block">
-            <p className="panel-label">upcoming events</p>
+          <div className="panel-block events-panel">
+            <div className="events-panel-header">
+              <div>
+                <p className="panel-label">upcoming events</p>
+                <h3>Next on deck</h3>
+              </div>
+              <CalendarDays size={22} />
+            </div>
 
             {events.length === 0 ? (
-              <p className="empty-calendar">No events loaded.</p>
+              <div className="empty-calendar-card">
+                <span>No events loaded.</span>
+                <small>Sync your calendar to view upcoming plans.</small>
+              </div>
             ) : (
               <div className="event-list">
-                {events.map((event, index) => (
+                {events.slice(0, 3).map((event, index) => (
                   <div className="event-item" key={event.id || index}>
-                    <strong>{event.title}</strong>
-                    <span>
-                      {new Date(event.start).toLocaleString([], {
+                    <div className="event-time-badge">
+                      {new Date(event.start).toLocaleDateString([], {
                         weekday: "short",
-                        hour: "numeric",
-                        minute: "2-digit",
                       })}
-                    </span>
-                    {event.location && <small>{event.location}</small>}
+                      <strong>
+                        {new Date(event.start).toLocaleTimeString([], {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </strong>
+                    </div>
+
+                    <div className="event-details">
+                      <strong>{event.title}</strong>
+                      <span>
+                        {new Date(event.start).toLocaleDateString([], {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </span>
+                      {event.location && <small>{event.location}</small>}
+                    </div>
                   </div>
                 ))}
               </div>

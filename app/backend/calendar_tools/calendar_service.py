@@ -9,7 +9,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-
+from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CREDENTIALS_PATH = BASE_DIR / "credentials.json"
@@ -83,16 +83,18 @@ def list_upcoming_events(days: int = 7, max_results: int = 20) -> list[dict[str,
 def list_events_for_day(date_string: str) -> list[dict[str, Any]]:
     service = get_calendar_service()
 
+    local_tz = ZoneInfo("America/New_York")
     day = parser.parse(date_string).date()
-    start = datetime.combine(day, datetime.min.time())
+
+    start = datetime.combine(day, datetime.min.time(), tzinfo=local_tz)
     end = start + timedelta(days=1)
 
     events_result = (
         service.events()
         .list(
             calendarId="primary",
-            timeMin=start.isoformat() + "Z",
-            timeMax=end.isoformat() + "Z",
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
             singleEvents=True,
             orderBy="startTime",
         )
@@ -112,7 +114,6 @@ def list_events_for_day(date_string: str) -> list[dict[str, Any]]:
         }
         for event in events_result.get("items", [])
     ]
-
 
 def create_calendar_event(
     title: str,

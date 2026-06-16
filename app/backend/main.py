@@ -13,6 +13,7 @@ from tools.file_manager import (
 )
 
 from calendar_tools.calendar_routes import router as calendar_router
+from calendar_tools.calendar_intent import handle_calendar_command
 
 
 app = FastAPI(title="ALFRED Backend")
@@ -48,6 +49,14 @@ def handle_command(request: CommandRequest):
 
     raw_command = request.command.strip()
     command = raw_command.lower()
+
+    # Calendar/chat intelligence
+    calendar_response = handle_calendar_command(raw_command)
+    if calendar_response:
+        return {
+            "response": calendar_response,
+            "requires_confirmation": False,
+        }
 
     if command in ["yes", "confirm", "do it"]:
         if not pending_action:
@@ -165,7 +174,8 @@ def handle_command(request: CommandRequest):
     return {
         "response": (
             "I can search files, open files, create folders, rename files, "
-            "organize screenshots, and help with your calendar."
+            "organize screenshots, and help with your calendar. Try asking: "
+            "\"what's on my calendar today?\""
         ),
         "requires_confirmation": False,
     }

@@ -526,75 +526,388 @@ button:hover {
   }
 }
 
-.calendar-assistant {
-  width: 100%;
-  padding: 1.5rem;
-  border: 1px solid rgba(80, 190, 255, 0.35);
-  border-radius: 24px;
-  background: rgba(5, 18, 35, 0.85);
-  color: #eaf8ff;
-  box-shadow: 0 0 30px rgba(73, 191, 255, 0.18);
-}
-
-.calendar-header,
-.calendar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.calendar-actions {
-  margin: 1.25rem 0;
-  justify-content: flex-start;
-}
-
-.calendar-assistant button {
-  border: 1px solid rgba(100, 210, 255, 0.55);
-  background: rgba(30, 130, 200, 0.18);
-  color: #eaf8ff;
-  border-radius: 999px;
-  padding: 0.7rem 1rem;
-  cursor: pointer;
-}
-
-.calendar-assistant button:hover {
-  background: rgba(30, 130, 200, 0.35);
-}
-
 .calendar-status {
   margin-top: 0.75rem;
   color: #8ee7ff;
 }
 
-.calendar-grid {
+.events-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.events-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top right, rgba(36, 246, 255, 0.16), transparent 42%),
+    linear-gradient(135deg, rgba(36, 246, 255, 0.08), transparent 55%);
+  pointer-events: none;
+}
+
+.events-panel-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.events-panel-header h3 {
+  margin: -0.35rem 0 0;
+  color: #dfffff;
+  font-size: clamp(1rem, 1.25vw, 1.25rem);
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 14px rgba(36, 246, 255, 0.45);
+}
+
+.events-panel-header svg {
+  color: #24f6ff;
+  filter: drop-shadow(0 0 8px rgba(36, 246, 255, 0.65));
+}
+
+.event-list {
+  position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.25rem;
+  gap: 0.7rem;
 }
 
-.calendar-card {
-  border: 1px solid rgba(100, 210, 255, 0.25);
-  background: rgba(255, 255, 255, 0.045);
-  border-radius: 18px;
-  padding: 1rem;
+.event-item {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem;
+  border: 1px solid rgba(36, 246, 255, 0.26);
+  background: rgba(0, 238, 255, 0.075);
+  box-shadow: inset 0 0 18px rgba(36, 246, 255, 0.06);
 }
 
-.event-row {
+.event-time-badge {
+  min-height: 62px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  border: 1px solid rgba(36, 246, 255, 0.38);
+  background: rgba(0, 12, 18, 0.68);
+  color: rgba(219, 254, 255, 0.7);
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+}
+
+.event-time-badge strong {
+  color: #dfffff;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.event-details {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.event-details strong {
+  color: #dfffff;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
+.event-details span,
+.event-details small {
+  color: rgba(219, 254, 255, 0.64);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.empty-calendar-card {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 0.25rem;
-  padding: 0.8rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.85rem;
+  border: 1px dashed rgba(36, 246, 255, 0.35);
+  background: rgba(0, 238, 255, 0.055);
 }
 
-.event-row span,
-.event-row small {
-  color: rgba(234, 248, 255, 0.72);
+.empty-calendar-card span {
+  color: #dfffff;
 }
 
-@media (max-width: 800px) {
-  .calendar-grid {
-    grid-template-columns: 1fr;
+.empty-calendar-card small {
+  color: rgba(219, 254, 255, 0.62);
+}
+
+.response-console p {
+  white-space: pre-wrap;
+}
+
+.chat-calendar-card {
+  position: relative;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(36, 246, 255, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(36, 246, 255, 0.12), transparent 38%),
+    rgba(0, 238, 255, 0.055);
+  box-shadow: inset 0 0 18px rgba(36, 246, 255, 0.06);
+}
+
+.chat-calendar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chat-calendar-header .panel-label {
+  margin-bottom: 0.25rem;
+}
+
+.chat-calendar-header h3 {
+  margin: 0;
+  color: #dfffff;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: capitalize;
+  text-shadow: 0 0 12px rgba(36, 246, 255, 0.35);
+}
+
+.chat-calendar-header svg {
+  color: #24f6ff;
+  filter: drop-shadow(0 0 8px rgba(36, 246, 255, 0.55));
+}
+
+.chat-calendar-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.chat-calendar-event {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.65rem;
+  border: 1px solid rgba(36, 246, 255, 0.22);
+  background: rgba(0, 12, 18, 0.58);
+}
+
+.chat-calendar-time {
+  display: grid;
+  place-items: center;
+  min-height: 46px;
+  padding: 0.35rem;
+  border: 1px solid rgba(36, 246, 255, 0.34);
+  color: #dfffff;
+  background: rgba(0, 238, 255, 0.07);
+  font-size: 0.78rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.chat-calendar-details {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.chat-calendar-details strong {
+  color: #dfffff;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
+.chat-calendar-details small {
+  color: rgba(219, 254, 255, 0.62);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-calendar-empty {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  border: 1px dashed rgba(36, 246, 255, 0.32);
+  background: rgba(0, 12, 18, 0.5);
+}
+
+.chat-calendar-empty span {
+  color: #dfffff;
+}
+
+.chat-calendar-empty small {
+  color: rgba(219, 254, 255, 0.62);
+}
+
+.chat-calendar-header.centered {
+  justify-content: center;
+  text-align: center;
+  position: relative;
+}
+
+.chat-calendar-header.centered svg {
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.chat-calendar-header.centered .panel-label {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.chat-week-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.chat-week-date {
+  color: rgba(219, 254, 255, 0.68);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.chat-week-name {
+  color: #dfffff;
+  font-size: 1rem;
+  text-align: center;
+  text-transform: capitalize;
+  text-shadow: 0 0 10px rgba(36, 246, 255, 0.32);
+}
+
+.chat-week-events summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-week-day {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(36, 246, 255, 0.22);
+  background: rgba(0, 12, 18, 0.58);
+}
+
+.chat-week-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 128px;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.chat-week-toggle {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #dfffff;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(36, 246, 255, 0.3);
+  background: rgba(0, 238, 255, 0.08);
+}
+
+.chat-week-toggle svg {
+  transition: transform 0.2s ease;
+}
+
+.chat-week-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.chat-week-dropdown {
+  width: 100%;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  border: 1px solid rgba(36, 246, 255, 0.35);
+  background: rgba(0, 12, 18, 0.78);
+  box-shadow: inset 0 0 18px rgba(36, 246, 255, 0.08);
+}
+
+.chat-week-event-row {
+  display: grid;
+  gap: 0.1rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid rgba(36, 246, 255, 0.12);
+}
+
+.chat-week-event-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.chat-week-event-row span {
+  color: #24f6ff;
+  font-size: 0.72rem;
+}
+
+.chat-week-event-row strong {
+  color: #dfffff;
+  font-size: 0.82rem;
+}
+
+.chat-week-event-row small,
+.chat-week-dropdown > small {
+  color: rgba(219, 254, 255, 0.62);
+  font-size: 0.72rem;
+}
+
+@media (max-width: 620px) {
+  .chat-week-day {
+    grid-template-columns: 56px 1fr;
   }
+
+  .chat-week-events {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .chat-week-events summary {
+    text-align: center;
+  }
+
+  .chat-week-dropdown {
+    position: static;
+    width: 100%;
+    margin-top: 0.45rem;
+  }
+
+  .chat-week-row {
+    grid-template-columns: 56px 1fr;
+  }
+
+  .chat-week-toggle {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    justify-content: center;
+  }
+}
+
+.chat-week-summary {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.75rem;
+  border: 1px dashed rgba(36, 246, 255, 0.32);
+  background: rgba(0, 238, 255, 0.055);
+}
+
+.chat-week-summary span {
+  color: #dfffff;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.chat-week-summary small {
+  color: rgba(219, 254, 255, 0.66);
+  line-height: 1.35;
 }

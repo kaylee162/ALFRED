@@ -98,6 +98,7 @@ def generate_weekly_summary(start_date_string: str) -> dict:
             {
                 "date": day.isoformat(),
                 "event_count": len(plan["events"]),
+                "events": plan["events"],
                 "free_focus_blocks": plan["free_focus_blocks"],
                 "top_recommendation": plan["recommendations"][0],
             }
@@ -112,6 +113,5 @@ def generate_weekly_summary(start_date_string: str) -> dict:
         "summary": [
             f"Busiest day: {busiest_day['date']} with {busiest_day['event_count']} events.",
             f"Lightest day: {lightest_day['date']} with {lightest_day['event_count']} events.",
-            "Use lighter days for deep work and heavier days for admin or smaller tasks.",
         ],
     }
