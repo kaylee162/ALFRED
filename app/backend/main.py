@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from tools.project_launcher import open_project
 from tools.file_manager import (
@@ -12,15 +12,23 @@ from tools.file_manager import (
     rename_file,
 )
 
+from calendar_tools.calendar_routes import router as calendar_router
+
+
 app = FastAPI(title="ALFRED Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(calendar_router)
 
 pending_action = None
 
@@ -155,6 +163,9 @@ def handle_command(request: CommandRequest):
         }
 
     return {
-        "response": "I can search files, open files, create folders, rename files, and organize screenshots.",
+        "response": (
+            "I can search files, open files, create folders, rename files, "
+            "organize screenshots, and help with your calendar."
+        ),
         "requires_confirmation": False,
     }
