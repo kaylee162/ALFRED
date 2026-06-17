@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import {
   Activity,
   CalendarDays,
@@ -12,6 +12,10 @@ import {
   Terminal,
 } from "lucide-react";
 
+import {
+  createCalendarEventFromForm,
+  updateCalendarEvent,
+} from "./api/calendarApi";
 import "./App.css";
 
 type ProjectItem = {
@@ -36,6 +40,7 @@ type CalendarEvent = {
   start: string;
   end?: string;
   location?: string | null;
+  description?: string | null;
 };
 
 type TomorrowPlan = {
@@ -48,6 +53,42 @@ type TomorrowPlan = {
   recommendations: string[];
   suggested_plan: string[];
 };
+
+
+type EditableCalendarEvent = {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  location?: string | null;
+  description?: string | null;
+};
+
+function toDateTimeLocalValue(value?: string | null) {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function getCreatedEventFromResponse(response: string): EditableCalendarEvent | null {
+  const match = response.match(/__ALFRED_CALENDAR_EVENT__=(.+)$/m);
+
+  if (!match) return null;
+
+  try {
+    return JSON.parse(match[1]) as EditableCalendarEvent;
+  } catch {
+    return null;
+  }
+}
+
+function getVisibleResponse(response: string) {
+  return response.replace(/\n?__ALFRED_CALENDAR_EVENT__=.+$/m, "").trim();
+}
 
 const API_BASE = "http://localhost:8000";
 
@@ -83,6 +124,8 @@ function ClockPanel() {
 }
 
 function parseCalendarResponse(response: string) {
+  response = getVisibleResponse(response);
+
   const isDailyCalendar =
     response.startsWith("Here’s your calendar for") ||
     response.startsWith("No events") ||
@@ -92,7 +135,7 @@ function parseCalendarResponse(response: string) {
 
   if (!isDailyCalendar && !isWeeklyCalendar) return null;
 
-    if (isWeeklyCalendar) {
+  if (isWeeklyCalendar) {
     const lines = response.split("\n");
 
     const weekItems: {
@@ -161,7 +204,9 @@ function parseCalendarResponse(response: string) {
 
     const summaryItems = lines
       .map((line) => line.trim())
-      .filter((line) => line.startsWith("•") && line.includes(":") && !line.includes("—"))
+      .filter(
+        (line) => line.startsWith("•") && line.includes(":") && !line.includes("—")
+      )
       .map((line) => line.replace("•", "").trim());
 
     return {
@@ -388,12 +433,30 @@ function ProjectExplorer({
 function App() {
   const [command, setCommand] = useState("");
   const [response, setResponse] = useState("Systems online. Awaiting command.");
-  const [projectExplorer, setProjectExplorer] = useState<ProjectExplorerData | null>(null);
+  const [projectExplorer, setProjectExplorer] =
+    useState<ProjectExplorerData | null>(null);
 
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarStatus, setCalendarStatus] = useState("calendar not checked");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tomorrowPlan] = useState<TomorrowPlan | null>(null);
+
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventDateTime, setEventDateTime] = useState("");
+  const [eventLocation, setEventLocation] = useState("");
+  const [eventDescription, setEventDescription] = useState("");
+  const [eventStatus, setEventStatus] = useState("");
+  const [eventDurationMinutes, setEventDurationMinutes] = useState(60);
+
+  const [editableEvent, setEditableEvent] =
+    useState<EditableCalendarEvent | null>(null);
+  const [isEditingEvent, setIsEditingEvent] = useState(false);
+  const [editEventTitle, setEditEventTitle] = useState("");
+  const [editEventStart, setEditEventStart] = useState("");
+  const [editEventEnd, setEditEventEnd] = useState("");
+  const [editEventLocation, setEditEventLocation] = useState("");
+  const [editEventDescription, setEditEventDescription] = useState("");
+  const [editEventStatus, setEditEventStatus] = useState("");
 
   async function submitCommand() {
     if (!command.trim()) return;
@@ -411,15 +474,26 @@ function App() {
 
       const data = await res.json();
 
+      if (!res.ok) {
+        throw new Error(data.detail || "Command failed");
+      }
+
+      const responseText = data.response || "";
+      const createdEvent = getCreatedEventFromResponse(responseText);
+
+      setEditableEvent(createdEvent);
+      setIsEditingEvent(false);
+
       if (data.type === "project_explorer" && data.project_data) {
         setProjectExplorer(data.project_data);
-        setResponse(data.response || "Project explorer loaded.");
+        setResponse(getVisibleResponse(responseText) || "Project explorer loaded.");
       } else {
         setProjectExplorer(null);
-        setResponse(data.response);
+        setResponse(getVisibleResponse(responseText));
       }
 
       setCommand("");
+      loadUpcomingEvents();
     } catch {
       setResponse("Backend connection failed.");
     }
@@ -469,6 +543,161 @@ function App() {
     }
   }
 
+  async function handleCreateEvent(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!eventTitle.trim() || !eventDateTime) {
+      setEventStatus("Add a title and date/time first.");
+      return;
+    }
+
+    setEventStatus("Creating event...");
+
+    try {
+      const created = await createCalendarEventFromForm({
+        title: eventTitle.trim(),
+        dateTime: eventDateTime,
+        location: eventLocation.trim(),
+        description: eventDescription.trim(),
+        durationMinutes: eventDurationMinutes,
+        reminderMinutes: 10,
+      });
+
+      const createdStart = created.start;
+      const createdEnd =
+        created.end ||
+        new Date(new Date(createdStart).getTime() + eventDurationMinutes * 60 * 1000).toISOString();
+
+      const createdEvent: EditableCalendarEvent = {
+        id: created.id,
+        title: created.title,
+        start: createdStart,
+        end: createdEnd,
+        location: created.location,
+        description: created.description,
+      };
+
+      setEditableEvent(createdEvent);
+      setIsEditingEvent(false);
+      setEventStatus("Event created.");
+      setResponse(
+        `Created calendar event: ${createdEvent.title}\n` +
+          `When: ${new Date(createdEvent.start).toLocaleString([], {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}\n` +
+          `Ends: ${new Date(createdEvent.end).toLocaleString([], {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}\n` +
+          `Location: ${createdEvent.location || "None"}`
+      );
+
+      setEventTitle("");
+      setEventDateTime("");
+      setEventLocation("");
+      setEventDescription("");
+      setEventDurationMinutes(60);
+
+      loadUpcomingEvents();
+    } catch {
+      setEventStatus("Could not create event.");
+    }
+  }
+
+  function openEventEditor(event: EditableCalendarEvent) {
+    const fallbackEnd = event.end
+      ? event.end
+      : new Date(new Date(event.start).getTime() + eventDurationMinutes * 60 * 1000).toISOString();
+
+    const eventWithEnd: EditableCalendarEvent = {
+      ...event,
+      end: fallbackEnd,
+    };
+
+    setEditableEvent(eventWithEnd);
+    setEditEventTitle(eventWithEnd.title || "");
+    setEditEventStart(toDateTimeLocalValue(eventWithEnd.start));
+    setEditEventEnd(toDateTimeLocalValue(eventWithEnd.end));
+    setEditEventLocation(eventWithEnd.location || "");
+    setEditEventDescription(eventWithEnd.description || "");
+    setEditEventStatus("");
+    setIsEditingEvent(true);
+  }
+
+  async function handleUpdateEvent(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!editableEvent) return;
+
+    if (!editEventTitle.trim() || !editEventStart || !editEventEnd) {
+      setEditEventStatus("Title, start, and end are required.");
+      return;
+    }
+
+    const updatedStart = new Date(editEventStart);
+    const updatedEnd = new Date(editEventEnd);
+
+    if (updatedEnd <= updatedStart) {
+      setEditEventStatus("End time must be after the start time.");
+      return;
+    }
+
+    setEditEventStatus("Updating event...");
+
+    try {
+      const updated = await updateCalendarEvent(editableEvent.id, {
+        title: editEventTitle.trim(),
+        start_time: updatedStart.toISOString(),
+        end_time: updatedEnd.toISOString(),
+        location: editEventLocation.trim(),
+        description: editEventDescription.trim(),
+      });
+
+      const updatedEvent: EditableCalendarEvent = {
+        id: updated.id,
+        title: updated.title,
+        start: updated.start,
+        end: updated.end || updatedEnd.toISOString(),
+        location: updated.location,
+        description: updated.description,
+      };
+
+      setEditableEvent(updatedEvent);
+      setIsEditingEvent(false);
+      setEditEventStatus("");
+
+      setResponse(
+        `Updated calendar event: ${updatedEvent.title}\n` +
+          `When: ${new Date(updatedEvent.start).toLocaleString([], {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}\n` +
+          `Ends: ${new Date(updatedEvent.end).toLocaleString([], {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}\n` +
+          `Location: ${updatedEvent.location || "None"}`
+      );
+
+      loadUpcomingEvents();
+    } catch {
+      setEditEventStatus("Could not update event.");
+    }
+  }
+
   useEffect(() => {
     loadUpcomingEvents();
   }, []);
@@ -515,6 +744,27 @@ function App() {
               <span>calendar assistant</span>
             </div>
           </div>
+
+          
+          <div className="panel-block">
+            <p className="panel-label">system load</p>
+
+            <div className="radial-stat">
+              <div className="radial-ring">
+                <span>{calendarConnected ? "82%" : "24%"}</span>
+              </div>
+              <p>assistant readiness</p>
+            </div>
+
+            <div className="activity-meter">
+              <Activity size={18} />
+              <span>
+                {calendarConnected
+                  ? "calendar online · planning enabled"
+                  : "agent idle · monitoring input"}
+              </span>
+            </div>
+          </div>
         </aside>
 
         <section className="center-console">
@@ -547,7 +797,7 @@ function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") submitCommand();
                 }}
-                placeholder='Try: "Whats on my calendar today?"'
+                placeholder='Try: "show me my projects"'
               />
               <button onClick={submitCommand} aria-label="Send command">
                 <Send size={18} />
@@ -564,7 +814,96 @@ function App() {
                 onOpenProject={openProject}
               />
             ) : (
-              <ChatCalendarResponse response={response} />
+              <>
+                <ChatCalendarResponse response={response} />
+
+                {editableEvent && !isEditingEvent && (
+                  <button
+                    type="button"
+                    className="event-edit-button"
+                    onClick={() => openEventEditor(editableEvent)}
+                  >
+                    Edit event
+                  </button>
+                )}
+
+                {isEditingEvent && editableEvent && (
+                  <form className="event-edit-panel" onSubmit={handleUpdateEvent}>
+                    <div className="event-edit-header">
+                      <div>
+                        <p className="panel-label">calendar edit</p>
+                        <h3>Update Event</h3>
+                      </div>
+                    </div>
+
+                    <label>
+                      Title
+                      <input
+                        value={editEventTitle}
+                        onChange={(e) => setEditEventTitle(e.target.value)}
+                        placeholder="Event title"
+                      />
+                    </label>
+
+                    <div className="event-edit-grid">
+                      <label>
+                        Start
+                        <input
+                          type="datetime-local"
+                          value={editEventStart}
+                          onChange={(e) => setEditEventStart(e.target.value)}
+                        />
+                      </label>
+
+                      <label>
+                        End
+                        <input
+                          type="datetime-local"
+                          value={editEventEnd}
+                          onChange={(e) => setEditEventEnd(e.target.value)}
+                        />
+                      </label>
+                    </div>
+
+                    <label>
+                      Location
+                      <input
+                        value={editEventLocation}
+                        onChange={(e) => setEditEventLocation(e.target.value)}
+                        placeholder="Add a location"
+                      />
+                    </label>
+
+                    <label>
+                      Description
+                      <textarea
+                        value={editEventDescription}
+                        onChange={(e) => setEditEventDescription(e.target.value)}
+                        placeholder="Add a description"
+                      />
+                    </label>
+
+                    {editEventStatus && <small>{editEventStatus}</small>}
+
+                    <div className="event-edit-actions">
+                      <button type="submit" className="event-save-button">
+                        Save changes
+                      </button>
+
+                      <button
+                        type="button"
+                        className="event-cancel-button"
+                        onClick={() => {
+                          setIsEditingEvent(false);
+                          setEditEventStatus("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </>
             )}
           </div>
 
@@ -650,26 +989,6 @@ function App() {
                 ))}
               </div>
             )}
-          </div>
-
-          <div className="panel-block">
-            <p className="panel-label">system load</p>
-
-            <div className="radial-stat">
-              <div className="radial-ring">
-                <span>{calendarConnected ? "82%" : "24%"}</span>
-              </div>
-              <p>assistant readiness</p>
-            </div>
-
-            <div className="activity-meter">
-              <Activity size={18} />
-              <span>
-                {calendarConnected
-                  ? "calendar online · planning enabled"
-                  : "agent idle · monitoring input"}
-              </span>
-            </div>
           </div>
         </aside>
       </section>
