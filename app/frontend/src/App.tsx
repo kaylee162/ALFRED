@@ -14,6 +14,22 @@ import {
 
 import "./App.css";
 
+type ProjectItem = {
+  name: string;
+  path: string;
+  type: "folder" | "file";
+  can_open?: boolean;
+};
+
+type ProjectExplorerData = {
+  success: boolean;
+  message: string;
+  root?: string;
+  current_path?: string;
+  parent_path?: string | null;
+  items: ProjectItem[];
+};
+
 type CalendarEvent = {
   id?: string;
   title: string;
@@ -303,9 +319,76 @@ function ChatCalendarResponse({ response }: { response: string }) {
   );
 }
 
+function ProjectExplorer({
+  data,
+  onFolderClick,
+  onOpenProject,
+}: {
+  data: ProjectExplorerData;
+  onFolderClick: (path: string | null) => void;
+  onOpenProject: (path: string) => void;
+}) {
+  return (
+    <div className="project-explorer-card">
+      <div className="project-explorer-header">
+        <div>
+          <p className="panel-label">project explorer</p>
+          <h3>{data.current_path?.split("\\").pop() || "source"}</h3>
+          <small>{data.current_path}</small>
+        </div>
+        <FolderOpen size={20} />
+      </div>
+
+      {data.parent_path && (
+        <button
+          className="project-back-button"
+          type="button"
+          onClick={() => onFolderClick(data.parent_path || null)}
+        >
+          ← Back
+        </button>
+      )}
+
+      <div className="project-file-list">
+        {data.items.length === 0 ? (
+          <small>No folders or files found.</small>
+        ) : (
+          data.items.map((item) => (
+            <div className="project-file-row" key={item.path}>
+              <button
+                className="project-file-main"
+                type="button"
+                onClick={() => {
+                  if (item.type === "folder") onFolderClick(item.path);
+                }}
+                disabled={item.type !== "folder"}
+              >
+                <FolderOpen size={16} />
+                <span>{item.name}</span>
+                <small>{item.type}</small>
+              </button>
+
+              {item.type === "folder" && (
+                <button
+                  className="project-open-button"
+                  type="button"
+                  onClick={() => onOpenProject(item.path)}
+                >
+                  Open in VS Code
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [command, setCommand] = useState("");
   const [response, setResponse] = useState("Systems online. Awaiting command.");
+  const [projectExplorer, setProjectExplorer] = useState<ProjectExplorerData | null>(null);
 
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarStatus, setCalendarStatus] = useState("calendar not checked");
@@ -327,11 +410,46 @@ function App() {
       });
 
       const data = await res.json();
-      setResponse(data.response);
+
+      if (data.type === "project_explorer" && data.project_data) {
+        setProjectExplorer(data.project_data);
+        setResponse(data.response || "Project explorer loaded.");
+      } else {
+        setProjectExplorer(null);
+        setResponse(data.response);
+      }
+
       setCommand("");
     } catch {
       setResponse("Backend connection failed.");
     }
+  }
+
+  async function loadProjectFolder(path?: string | null) {
+    const res = await fetch(`${API_BASE}/projects/list`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+
+    const data = await res.json();
+    setProjectExplorer(data);
+    setResponse(data.message || "Project folder loaded.");
+  }
+
+  async function openProject(path: string) {
+    const res = await fetch(`${API_BASE}/projects/open`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+
+    const data = await res.json();
+    setResponse(data.message || "Project opened.");
   }
 
   async function loadUpcomingEvents() {
@@ -439,7 +557,15 @@ function App() {
 
           <div className="response-console">
             <p className="panel-label">system response</p>
-            <ChatCalendarResponse response={response} />
+            {projectExplorer ? (
+              <ProjectExplorer
+                data={projectExplorer}
+                onFolderClick={loadProjectFolder}
+                onOpenProject={openProject}
+              />
+            ) : (
+              <ChatCalendarResponse response={response} />
+            )}
           </div>
 
           {tomorrowPlan && (
@@ -485,7 +611,6 @@ function App() {
             <div className="events-panel-header">
               <div>
                 <p className="panel-label">upcoming events</p>
-                <h3>Next on deck</h3>
               </div>
               <CalendarDays size={22} />
             </div>
