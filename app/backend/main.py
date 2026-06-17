@@ -3,6 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from tools.project_launcher import open_project
+from tools.project_launcher import (
+    open_project,
+    list_project_folder,
+    open_project_path,
+)
+
 from tools.file_manager import (
     search_files,
     open_path,
@@ -37,11 +43,25 @@ pending_action = None
 class CommandRequest(BaseModel):
     command: str
 
+class ProjectFolderRequest(BaseModel):
+    path: str | None = None
+
+
+class OpenProjectRequest(BaseModel):
+    path: str
 
 @app.get("/")
 def health_check():
     return {"status": "ALFRED backend is running"}
 
+@app.post("/projects/list")
+def projects_list(request: ProjectFolderRequest):
+    return list_project_folder(request.path)
+
+
+@app.post("/projects/open")
+def projects_open(request: OpenProjectRequest):
+    return open_project_path(request.path)
 
 @app.post("/command")
 def handle_command(request: CommandRequest):
@@ -162,6 +182,20 @@ def handle_command(request: CommandRequest):
                 "Type yes to confirm or cancel to stop."
             ),
             "requires_confirmation": True,
+        }
+    
+    if (
+        "show me my projects" in command
+        or "show projects" in command
+        or "my projects" in command
+    ):
+        result = list_project_folder()
+
+        return {
+            "response": result["message"],
+            "requires_confirmation": False,
+            "type": "project_explorer",
+            "project_data": result,
         }
 
     if "open" in command:
