@@ -62,13 +62,4 @@ def handle_command(request: CommandRequest):
             "requires_confirmation": False,
         }
 
-    result = handle_ai_command(command)
-
-    return {
-        "response": result["response"],
-        "requires_confirmation": result.get("requires_confirmation", False),
-        "type": result.get("type"),
-        "calendar_event": result.get("calendar_event"),
-        "calendar_events": result.get("calendar_events"),
-        "plan": result.get("plan"),
-    }
+    return handle_ai_command(command)
