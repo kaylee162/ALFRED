@@ -2,217 +2,378 @@
 
 **Adaptive Learning Framework for Responsive Executive Decisions**
 
-ALFRED is a personal AI productivity assistant inspired by Tony Stark's JARVIS. Built with agentic AI and tool-calling, ALFRED helps manage files, projects, notes, tasks, and workflows through natural language interactions while keeping the user in control of important actions. 
+ALFRED is a personal AI desktop assistant inspired by Tony Stark's JARVIS. Built with Python, FastAPI, React, and local AI models, ALFRED aims to become a centralized productivity hub capable of understanding natural language and performing everyday computer tasks.
+
+Unlike traditional assistants, ALFRED is designed to integrate multiple productivity tools into a single interface, allowing workflows to span files, calendars, email, projects, and documents.
 
 ---
 
-## Overview
+# Features
 
-The goal of ALFRED is to simplify everyday computer workflows by acting as a centralized AI command center.
+## Natural Language Commands
 
-Rather than focusing on full autonomy, ALFRED is designed to improve productivity by helping users:
+ALFRED accepts conversational commands and routes them to the appropriate tool or service.
 
-- Search files and folders
-- Manage tasks and reminders
-- Summarize documents
-- Search personal knowledge
-- Launch applications and workflows
-- Organize projects
-- Draft emails
-- Plan schedules
-- Execute multi-step actions through natural language commands
-
-ALFRED is primarily designed as a keyboard-first assistant, with optional voice support planned for future releases.
-
----
-
-## Example Commands
+Examples:
 
 ```text
-Open my project-name in VS Code
+Show me today's calendar
 
-Summarize the PDF I just downloaded
+Create an event tomorrow at 3pm called Team Meeting
 
-Create study notes from this document
+Open my portfolio project
 
-Check tomorrow's calendar and tell me what I should prepare
+Search Downloads for resume
 
-Organize my desktop screenshots
-
-Draft a reply to this email
+What do I have this week?
 ```
 
 ---
 
-## Core Features
+## File Management
 
-### File Management
+Currently supported:
 
 - Search files and folders
+- Browse Desktop, Downloads, and Documents
+- Open files and folders
+- Preview available files
+- Safe read-only access to user files
+
+Current permissions:
+
+- Read files
+- Read folders
 - Open files
-- Organize downloads
+
+Future permissions: 
+
+- Delete files  
+- Move files 
 - Rename files
-- Sort screenshots and documents
+- Modify files
 
-### Project Assistant
-
-- Launch development environments
-- Open coding projects
-- Create project notes
-- Track project ideas
-- Search previous work
-
-### Knowledge & Documents
-
-- Search personal notes
-- Summarize PDFs and documents
-- Generate study guides
-- Answer questions from personal files
-
-### Calendar & Planning
-
-- View upcoming events
-- Create reminders
-- Generate daily plans
-- Produce weekly summaries
-
-### Email Assistance
-
-- Summarize inbox activity
-- Draft email responses
-- Identify important messages
-- Assist with communication workflows
+File editing functionality will be added in a future release.
 
 ---
 
-## Safety First
+## Project Launcher
 
-ALFRED follows a human-in-the-loop design philosophy.
+Quickly launch development projects from a single command.
 
-Potentially destructive actions always require confirmation before execution.
+Current capabilities:
+
+- Browse project directories
+- View project folders
+- Launch projects in VS Code
+- Navigate project structures
+
+---
+
+## Google Calendar Integration
+
+ALFRED is connected directly to Google Calendar.
+
+Current features:
+
+- Create events
+- Edit existing events
+- Daily schedule preview
+- Tomorrow preview
+- Weekly schedule summary
+- Top 3 upcoming events dashboard
+- Natural language event creation
 
 Examples:
 
-- Deleting files
-- Moving folders
-- Sending emails
-- Running system commands
+```text
+Create an event tomorrow at 6pm called Dinner
 
-This ensures the user remains in control of important decisions.
+What's on my calendar today?
 
----
+Plan my week
 
-## Memory System
-
-ALFRED can maintain contextual memory to improve future interactions.
-
-Examples include:
-
-- Frequently used projects
-- Preferred applications
-- Folder locations
-- Common workflows
-- Productivity preferences
-- Personal naming conventions
-
-This allows the assistant to become more personalized over time. 
+Show tomorrow's schedule
+```
 
 ---
 
-## Planned Architecture
+# Current Architecture
 
-### Backend
+```
+React + TypeScript Frontend
+            │
+            ▼
+      FastAPI Backend
+            │
+            ▼
+Natural Language Processor
+(Currently migrating to Ollama)
+            │
+            ▼
+Tool Router
+    ├── File Manager
+    ├── Project Launcher
+    ├── Calendar
+    └── Future Integrations
+```
+
+---
+
+# Project Structure
+
+```
+app/
+│
+├── backend/
+│   ├── main.py
+│   │
+│   ├── calendar_tools/
+│   │   ├── calendar_intent.py
+│   │   ├── calendar_routes.py
+│   │   ├── calendar_service.py
+│   │   └── planning_service.py
+│   │
+│   ├── tools/
+│   │   ├── file_manager.py
+│   │   └── project_launcher.py
+│   │
+│   └── ai/
+│       └── (Ollama integration)
+│
+└── frontend/
+    ├── React
+    ├── TypeScript
+    └── Vite
+```
+
+---
+
+# Important Files
+
+### `main.py`
+
+Main FastAPI application.
+
+Responsible for:
+
+- API routes
+- Command handling
+- Tool routing
+- Backend startup
+
+---
+
+### `calendar_intent.py`
+
+Parses natural language calendar requests.
+
+Examples:
+
+- Create event
+- Update event
+- Daily schedule
+- Weekly planning
+
+---
+
+### `calendar_routes.py`
+
+REST API endpoints for calendar functionality.
+
+---
+
+### `calendar_service.py`
+
+Communicates with the Google Calendar API.
+
+Handles:
+
+- Creating events
+- Updating events
+- Reading events
+- Authentication
+
+---
+
+### `planning_service.py`
+
+Generates higher-level planning views.
+
+Examples:
+
+- Weekly summaries
+- Tomorrow overview
+- Event analysis
+
+---
+
+### `file_manager.py`
+
+Responsible for safe file access.
+
+Current capabilities:
+
+- File search
+- Folder search
+- Open files
+- Read directory contents
+
+---
+
+### `project_launcher.py`
+
+Discovers development projects and launches them in VS Code.
+
+---
+
+# Technology Stack
+
+## Backend
 
 - Python
 - FastAPI
-- SQLite
-- OpenAI API
 
-### Agent Framework
-
-- OpenAI Tool Calling
-- LangGraph
-- LangChain (optional)
-
-### Frontend
+## Frontend
 
 - React
+- TypeScript
 - Vite
-- Electron or Tauri
 
-### Desktop Integration
+## AI
 
-- PyAutoGUI
-- Native OS APIs
-- Subprocess
+- Ollama
+- Local LLMs
 
-### Voice (Future)
+## Integrations
 
-- Whisper
-- OpenAI Speech APIs
-- ElevenLabs
+- Google Calendar API
 
 ---
 
-## Development Roadmap
+# Future Features
+
+## Productivity Integrations
+
+Planned support for:
+
+- Gmail
+- Google Docs
+- Google Sheets
+- Notes
+- Tasks
+
+---
+
+## Connected Workflows
+
+One of ALFRED's primary goals is connecting multiple tools together.
+
+Examples:
+
+- Read an email → summarize it → create a calendar event
+- Read meeting notes → generate tasks
+- Search documents → create reminders
+- Summarize files → draft an email
+- Generate schedules from project deadlines
+
+Instead of isolated commands, ALFRED will support intelligent multi-step workflows.
+
+---
+
+## Voice Assistant
+
+Future voice capabilities include:
+
+- Text-to-speech responses
+- Voice dictation
+- Wake-word activation ("Hey Alfred")
+- Hands-free interaction
+
+---
+
+## Desktop Integration
+
+Planned improvements:
+
+- Global keyboard shortcut
+- Background system tray application
+- Faster startup
+- Launch on boot
+
+---
+
+## AI Improvements
+
+Future work includes:
+
+- Better natural language understanding
+- Multi-step reasoning
+- Long-term memory
+- Context-aware conversations
+- Smarter command routing
+- Improved tool selection
+
+---
+
+# Roadmap
 
 ### Phase 1
-Basic command bar and AI chat
+
+- Desktop interface
+- Backend API
+- Command routing
 
 ### Phase 2
-File search and application launching
+
+- File management
+- Project launcher
 
 ### Phase 3
-Task management and reminders
+
+- Google Calendar integration
 
 ### Phase 4
-Document search and summarization
+
+- Ollama integration
+- Local language model
 
 ### Phase 5
-Calendar and email integrations
+
+- Gmail
+- Google Docs
+- Google Sheets
+- Notes
 
 ### Phase 6
-Memory system
+
+- Connected agent workflows
 
 ### Phase 7
-Voice mode
+
+- Voice assistant
 
 ### Phase 8
-Agentic workflows and final polish
+
+- Long-term memory
+- Fully agentic productivity assistant
 
 ---
 
-## Future Vision
+# Inspiration
 
-Future versions of ALFRED may support:
-
-- Local AI models
-- Offline operation
-- Enhanced privacy
-- Multi-agent collaboration
-- Advanced workflow automation
-
-Potential local models:
-
-- Llama
-- Qwen
-- DeepSeek
-
----
-
-## Inspiration
-
-Inspired by fictional AI assistants such as:
+Inspired by fictional AI assistants including:
 
 - JARVIS
 - FRIDAY
 - EDITH
 
-The goal is not to recreate science fiction, but to build a practical AI assistant that meaningfully improves everyday productivity.
+The goal isn't to recreate science fiction, but to build a practical desktop AI assistant that makes everyday workflows faster, smarter, and more connected.
 
 ---
 
-## Author
+# Author
 
-Kaylee Henry  
-Georgia Tech
+**Kaylee Henry**
+
+Computer Science @ Georgia Tech

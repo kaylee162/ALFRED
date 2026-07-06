@@ -1,17 +1,15 @@
-edit event does work
-
-edit button matches save & cancel button
-
+todos:
 clean up app.css
 clean up app.tsx
+connect ollama to all tools
+    calendar
+    project launcher
+    file manager
 
-multi day chat is a bit wanky (Friday 9pm to Saturday at 11pm doesn't work)
-could be fixed by improving chat system to be more intelligent 
+    all future tools
 
-overall make chat system more intelligent / advanced
-use OPENAI natural language system to better process commands!!!!!
-
-____
+----
+running the app:
 
 run backend
 cd app/backend
@@ -20,3 +18,17 @@ cd app/backend
 run frontend
 cd app/frontend
 npm run dev
+
+---
+AI Model
+ollama qwen2.5:3b
+
+connecting ollama to alfred in progress
+not connected to any tools inside alfred yet, but language is working
+
+
+site: 
+https://ollama.com/search
+
+to run: 
+ollama run qwen2.5:3b
