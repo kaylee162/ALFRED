@@ -162,6 +162,49 @@ def create_calendar_event(
         "htmlLink": created_event.get("htmlLink"),
     }
 
+def update_calendar_event(
+    event_id: str,
+    title: str,
+    start_time: str,
+    end_time: str,
+    description: str | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    service = get_calendar_service()
+
+    updated_event = (
+        service.events()
+        .patch(
+            calendarId="primary",
+            eventId=event_id,
+            body={
+                "summary": title,
+                "location": location,
+                "description": description,
+                "start": {
+                    "dateTime": start_time,
+                    "timeZone": "America/New_York",
+                },
+                "end": {
+                    "dateTime": end_time,
+                    "timeZone": "America/New_York",
+                },
+            },
+        )
+        .execute()
+    )
+
+    return {
+        "id": updated_event.get("id"),
+        "title": updated_event.get("summary", "Untitled"),
+        "start": updated_event.get("start", {}).get("dateTime")
+        or updated_event.get("start", {}).get("date"),
+        "end": updated_event.get("end", {}).get("dateTime")
+        or updated_event.get("end", {}).get("date"),
+        "location": updated_event.get("location"),
+        "description": updated_event.get("description"),
+        "htmlLink": updated_event.get("htmlLink"),
+    }
 
 def create_reminder(
     title: str,
