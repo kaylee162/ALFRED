@@ -4,23 +4,22 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:3b"
 
 
-def chat_with_ollama(messages: list[dict], tools: list[dict] | None = None) -> dict:
+def chat_with_ollama(prompt: str) -> str:
     payload = {
         "model": MODEL,
-        "messages": messages,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
         "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "temperature": 0.1,
-            "num_predict": 80,
-            "num_ctx": 1024,
-            "num_thread": 8,
-        },
     }
 
-    if tools:
-        payload["tools"] = tools
+    response = requests.post(OLLAMA_URL, json=payload, timeout=60)
 
-    response = requests.post(OLLAMA_URL, json=payload, timeout=120)
-    response.raise_for_status()
-    return response.json()
+    if not response.ok:
+        raise Exception(f"Ollama error {response.status_code}: {response.text}")
+
+    data = response.json()
+    return data["message"]["content"]

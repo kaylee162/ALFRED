@@ -440,7 +440,7 @@ function ProjectExplorer({
       <div className="project-explorer-header">
         <div>
           <p className="panel-label">project explorer</p>
-          <h3>{data.current_path?.split("\\").pop() || "source"}</h3>
+          <h3>{data.current_path?.split(/[\\/]/).pop() || "src"}</h3>
           <small>{data.current_path}</small>
         </div>
         <FolderOpen size={20} />
@@ -562,7 +562,18 @@ function App() {
         setPendingEndTime(pending.draft.end_time || "");
       }
 
-      if (data.type === "project_explorer" && data.project_data) {
+      if (data.type === "project_list") {
+        setProjectExplorer({
+          success: data.success ?? true,
+          message: data.message || data.response || "Showing projects.",
+          root: data.root,
+          current_path: data.current_path,
+          parent_path: data.parent_path,
+          items: data.items || [],
+        });
+
+        setResponse(getVisibleResponse(responseText) || data.message || "Project explorer loaded.");
+      } else if (data.type === "project_explorer" && data.project_data) {
         setProjectExplorer(data.project_data);
         setResponse(getVisibleResponse(responseText) || "Project explorer loaded.");
       } else {
