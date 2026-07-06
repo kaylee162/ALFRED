@@ -1368,3 +1368,165 @@ button:hover {
     flex-direction: column;
   }
 }
+
+/* ================================
+   ALFRED Calendar HUD Refresh
+================================ */
+
+.events-panel,
+.chat-calendar-card,
+.event-edit-panel,
+.create-event-panel {
+  border: 1px solid rgba(36, 246, 255, 0.55);
+  background:
+    linear-gradient(135deg, rgba(0, 30, 48, 0.9), rgba(0, 10, 18, 0.86)),
+    radial-gradient(circle at top right, rgba(36, 246, 255, 0.18), transparent 38%);
+  box-shadow:
+    0 0 22px rgba(36, 246, 255, 0.2),
+    inset 0 0 28px rgba(36, 246, 255, 0.08);
+  clip-path: polygon(
+    0 0,
+    calc(100% - 16px) 0,
+    100% 16px,
+    100% 100%,
+    16px 100%,
+    0 calc(100% - 16px)
+  );
+}
+
+.events-panel-header,
+.chat-calendar-header,
+.event-edit-header {
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid rgba(36, 246, 255, 0.22);
+}
+
+.events-panel-header h3,
+.chat-calendar-header h3,
+.event-edit-header h3 {
+  color: #e8ffff;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+}
+
+.event-item,
+.chat-calendar-event,
+.chat-week-day,
+.chat-week-dropdown,
+.chat-week-summary,
+.empty-calendar-card,
+.chat-calendar-empty {
+  border: 1px solid rgba(36, 246, 255, 0.34);
+  background:
+    linear-gradient(135deg, rgba(0, 238, 255, 0.08), rgba(0, 67, 112, 0.1)),
+    rgba(0, 12, 18, 0.78);
+  box-shadow:
+    inset 0 0 18px rgba(36, 246, 255, 0.07),
+    0 0 12px rgba(36, 246, 255, 0.08);
+}
+
+.event-item:hover,
+.chat-calendar-event:hover,
+.chat-week-day:hover {
+  border-color: rgba(36, 246, 255, 0.65);
+  background:
+    linear-gradient(135deg, rgba(0, 238, 255, 0.13), rgba(0, 67, 112, 0.16)),
+    rgba(0, 16, 26, 0.88);
+  box-shadow:
+    0 0 20px rgba(36, 246, 255, 0.18),
+    inset 0 0 20px rgba(36, 246, 255, 0.1);
+}
+
+.event-time-badge,
+.chat-calendar-time,
+.chat-week-toggle {
+  border: 1px solid rgba(36, 246, 255, 0.55);
+  background: rgba(0, 26, 42, 0.86);
+  color: #dfffff;
+  box-shadow:
+    inset 0 0 14px rgba(36, 246, 255, 0.1),
+    0 0 12px rgba(36, 246, 255, 0.12);
+}
+
+.event-time-badge,
+.chat-calendar-time {
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.event-details strong,
+.chat-calendar-details strong,
+.chat-week-event-row strong,
+.chat-week-name {
+  color: #f2ffff;
+  text-shadow: 0 0 10px rgba(36, 246, 255, 0.35);
+}
+
+.event-details span,
+.event-details small,
+.chat-calendar-details small,
+.chat-week-event-row small,
+.chat-week-dropdown > small,
+.empty-calendar-card small,
+.chat-calendar-empty small,
+.chat-week-summary small {
+  color: rgba(219, 254, 255, 0.68);
+}
+
+.chat-week-date,
+.chat-week-event-row span {
+  color: #24f6ff;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.chat-week-toggle {
+  border-radius: 0;
+  justify-content: center;
+}
+
+.event-edit-button,
+.event-save-button,
+.event-cancel-button,
+.create-event-panel button {
+  border-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+}
+
+.event-edit-button,
+.event-save-button,
+.create-event-panel button {
+  background:
+    linear-gradient(135deg, rgba(0, 238, 255, 0.22), rgba(0, 132, 255, 0.28)),
+    rgba(0, 16, 26, 0.9);
+  border-color: rgba(36, 246, 255, 0.72);
+  color: #eaffff;
+}
+
+.event-cancel-button {
+  background: rgba(0, 12, 18, 0.82);
+  border-color: rgba(189, 252, 255, 0.32);
+  color: rgba(219, 254, 255, 0.72);
+}
+
+.event-edit-panel input,
+.event-edit-panel textarea,
+.create-event-panel input,
+.create-event-panel textarea {
+  border-radius: 0;
+  border: 1px solid rgba(36, 246, 255, 0.45);
+  background: rgba(0, 12, 18, 0.86);
+  color: #eaffff;
+  box-shadow: inset 0 0 16px rgba(36, 246, 255, 0.1);
+}
+
+.event-edit-panel input:focus,
+.event-edit-panel textarea:focus,
+.create-event-panel input:focus,
+.create-event-panel textarea:focus {
+  border-color: rgba(36, 246, 255, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(36, 246, 255, 0.14),
+    0 0 18px rgba(36, 246, 255, 0.2),
+    inset 0 0 18px rgba(36, 246, 255, 0.14);
+}

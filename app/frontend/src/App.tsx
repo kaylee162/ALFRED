@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import {
+  createCalendarEvent,
   createCalendarEventFromForm,
   updateCalendarEvent,
 } from "./api/calendarApi";
@@ -64,30 +65,91 @@ type EditableCalendarEvent = {
   description?: string | null;
 };
 
+type PendingCalendarEvent = {
+  missing_fields: ("title" | "date" | "time")[];
+  draft: {
+    title?: string;
+    date?: string;
+    start_time?: string;
+    end_time?: string;
+    start?: string;
+    end?: string;
+    location?: string | null;
+    description?: string | null;
+  };
+};
+
 function toDateTimeLocalValue(value?: string | null) {
   if (!value) return "";
 
-  const date = new Date(value);
+  const cleanedValue = value.includes("T")
+    ? value
+    : value.replace(" ", "T");
+
+  const date = new Date(cleanedValue);
   if (Number.isNaN(date.getTime())) return "";
 
-  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function normalizeEditableEvent(raw: any): EditableCalendarEvent | null {
+  if (!raw) return null;
+
+  const start =
+    typeof raw.start === "string"
+      ? raw.start
+      : raw.start?.dateTime || raw.start?.date || raw.start_time;
+
+  const end =
+    typeof raw.end === "string"
+      ? raw.end
+      : raw.end?.dateTime || raw.end?.date || raw.end_time;
+
+  if (!raw.id || !start) return null;
+
+  return {
+    id: raw.id,
+    title: raw.title || raw.summary || "Untitled",
+    start,
+    end,
+    location: raw.location || null,
+    description: raw.description || null,
+  };
 }
 
 function getCreatedEventFromResponse(response: string): EditableCalendarEvent | null {
   const match = response.match(/__ALFRED_CALENDAR_EVENT__=(.+)$/m);
-
   if (!match) return null;
 
   try {
-    return JSON.parse(match[1]) as EditableCalendarEvent;
+    return normalizeEditableEvent(JSON.parse(match[1]));
+  } catch {
+    return null;
+  }
+}
+
+function getPendingEventFromResponse(response: string): PendingCalendarEvent | null {
+  const match = response.match(/__ALFRED_PENDING_EVENT__=(.+)$/m);
+  if (!match) return null;
+
+  try {
+    return JSON.parse(match[1]) as PendingCalendarEvent;
   } catch {
     return null;
   }
 }
 
 function getVisibleResponse(response: string) {
-  return response.replace(/\n?__ALFRED_CALENDAR_EVENT__=.+$/m, "").trim();
+  return response
+    .replace(/\n?__ALFRED_CALENDAR_EVENT__=.+$/m, "")
+    .replace(/\n?__ALFRED_PENDING_EVENT__=.+$/m, "")
+    .trim();
 }
 
 const API_BASE = "http://localhost:8000";
@@ -458,6 +520,13 @@ function App() {
   const [editEventDescription, setEditEventDescription] = useState("");
   const [editEventStatus, setEditEventStatus] = useState("");
 
+  const [pendingEvent, setPendingEvent] = useState<PendingCalendarEvent | null>(null);
+  const [pendingTitle, setPendingTitle] = useState("");
+  const [pendingDate, setPendingDate] = useState("");
+  const [pendingStartTime, setPendingStartTime] = useState("");
+  const [pendingEndTime, setPendingEndTime] = useState("");
+  const [pendingStatus, setPendingStatus] = useState("");
+  
   async function submitCommand() {
     if (!command.trim()) return;
 
@@ -480,9 +549,18 @@ function App() {
 
       const responseText = data.response || "";
       const createdEvent = getCreatedEventFromResponse(responseText);
+      const pending = getPendingEventFromResponse(responseText);
 
       setEditableEvent(createdEvent);
+      setPendingEvent(pending);
       setIsEditingEvent(false);
+
+      if (pending) {
+        setPendingTitle(pending.draft.title || "");
+        setPendingDate(pending.draft.date || "");
+        setPendingStartTime(pending.draft.start_time || "");
+        setPendingEndTime(pending.draft.end_time || "");
+      }
 
       if (data.type === "project_explorer" && data.project_data) {
         setProjectExplorer(data.project_data);
@@ -496,6 +574,59 @@ function App() {
       loadUpcomingEvents();
     } catch {
       setResponse("Backend connection failed.");
+    }
+  }
+
+  async function handlePendingEventSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!pendingEvent) return;
+
+    const title = pendingTitle.trim();
+    const date = pendingDate || pendingEvent.draft.date;
+    const startTime = pendingStartTime || pendingEvent.draft.start_time;
+    const endTime = pendingEndTime || pendingEvent.draft.end_time;
+
+    if (!title || !date || !startTime) {
+      setPendingStatus("Title, date, and start time are required.");
+      return;
+    }
+
+    const start = new Date(`${date}T${startTime}`);
+    const end = endTime
+      ? new Date(`${date}T${endTime}`)
+      : new Date(start.getTime() + 60 * 60 * 1000);
+
+    if (end <= start) {
+      end.setDate(end.getDate() + 1);
+    }
+
+    setPendingStatus("Creating event...");
+
+    try {
+      const created = await createCalendarEvent({
+        title,
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        location: pendingEvent.draft.location || "",
+        description: pendingEvent.draft.description || "",
+        reminder_minutes: 10,
+      });
+
+      const createdEvent = normalizeEditableEvent(created);
+
+      if (!createdEvent) {
+        setPendingStatus("Event was created, but ALFRED could not read the returned event data.");
+        return;
+      }
+
+      setEditableEvent(createdEvent);
+      setPendingEvent(null);
+      setPendingStatus("");
+      setResponse(`Created event: ${createdEvent.title}`);
+
+      loadUpcomingEvents();
+    } catch {
+      setPendingStatus("Could not create event.");
     }
   }
 
@@ -612,12 +743,27 @@ function App() {
   }
 
   function openEventEditor(event: EditableCalendarEvent) {
-    const fallbackEnd = event.end
-      ? event.end
-      : new Date(new Date(event.start).getTime() + eventDurationMinutes * 60 * 1000).toISOString();
+    const normalizedEvent = normalizeEditableEvent(event);
+
+    if (!normalizedEvent) {
+      setEditEventStatus("Could not open editor because this event is missing start time data.");
+      return;
+    }
+
+    const startDate = new Date(normalizedEvent.start);
+
+    if (Number.isNaN(startDate.getTime())) {
+      setEditEventStatus("Could not open editor because the start time is invalid.");
+      return;
+    }
+
+    const fallbackEnd =
+      normalizedEvent.end && !Number.isNaN(new Date(normalizedEvent.end).getTime())
+        ? normalizedEvent.end
+        : new Date(startDate.getTime() + 60 * 60 * 1000).toISOString();
 
     const eventWithEnd: EditableCalendarEvent = {
-      ...event,
+      ...normalizedEvent,
       end: fallbackEnd,
     };
 
@@ -629,6 +775,16 @@ function App() {
     setEditEventDescription(eventWithEnd.description || "");
     setEditEventStatus("");
     setIsEditingEvent(true);
+  }
+
+  function closeEventEditor() {
+    setIsEditingEvent(false);
+    setEditEventTitle("");
+    setEditEventStart("");
+    setEditEventEnd("");
+    setEditEventLocation("");
+    setEditEventDescription("");
+    setEditEventStatus("");
   }
 
   async function handleUpdateEvent(e: FormEvent<HTMLFormElement>) {
@@ -660,13 +816,15 @@ function App() {
         description: editEventDescription.trim(),
       });
 
-      const updatedEvent: EditableCalendarEvent = {
-        id: updated.id,
-        title: updated.title,
-        start: updated.start,
-        end: updated.end || updatedEnd.toISOString(),
-        location: updated.location,
-        description: updated.description,
+      const normalizedUpdated = normalizeEditableEvent(updated);
+
+      const updatedEvent: EditableCalendarEvent = normalizedUpdated || {
+        id: editableEvent.id,
+        title: editEventTitle.trim(),
+        start: updatedStart.toISOString(),
+        end: updatedEnd.toISOString(),
+        location: editEventLocation.trim(),
+        description: editEventDescription.trim(),
       };
 
       setEditableEvent(updatedEvent);
@@ -780,7 +938,7 @@ function App() {
           <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.3
+              Adaptive Learning Framework for Responsive Executive Decisions V.4
             </p>
           </div>
 
@@ -817,6 +975,80 @@ function App() {
               <>
                 <ChatCalendarResponse response={response} />
 
+                {pendingEvent && (
+                  <form className="event-edit-panel" onSubmit={handlePendingEventSave}>
+                    <div className="event-edit-header">
+                      <div>
+                        <p className="panel-label">missing event info</p>
+                        <h3>Add missing fields</h3>
+                      </div>
+                    </div>
+
+                    {pendingEvent.missing_fields.includes("title") && (
+                      <label>
+                        Title
+                        <input
+                          value={pendingTitle}
+                          onChange={(e) => setPendingTitle(e.target.value)}
+                          placeholder="Event title"
+                        />
+                      </label>
+                    )}
+
+                    {pendingEvent.missing_fields.includes("date") && (
+                      <label>
+                        Date
+                        <input
+                          type="date"
+                          value={pendingDate}
+                          onChange={(e) => setPendingDate(e.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {pendingEvent.missing_fields.includes("time") && (
+                      <div className="event-edit-grid">
+                        <label>
+                          Start time
+                          <input
+                            type="time"
+                            value={pendingStartTime}
+                            onChange={(e) => setPendingStartTime(e.target.value)}
+                          />
+                        </label>
+
+                        <label>
+                          End time
+                          <input
+                            type="time"
+                            value={pendingEndTime}
+                            onChange={(e) => setPendingEndTime(e.target.value)}
+                          />
+                        </label>
+                      </div>
+                    )}
+
+                    {pendingStatus && <small>{pendingStatus}</small>}
+
+                    <div className="event-edit-actions">
+                      <button type="submit" className="event-save-button">
+                        Save event
+                      </button>
+
+                      <button
+                        type="button"
+                        className="event-cancel-button"
+                        onClick={() => {
+                          setPendingEvent(null);
+                          setPendingStatus("");
+                          setResponse("Event creation cancelled.");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
                 {editableEvent && !isEditingEvent && (
                   <button
                     type="button"

@@ -1,15 +1,67 @@
-# app/backend/calendar_tools/calendar_intent.py
-
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from .calendar_service import list_events_for_day, list_upcoming_events
-from .planning_service import generate_daily_plan, generate_weekly_summary
-from dateutil import parser
-from .calendar_service import list_events_for_day, list_upcoming_events, create_calendar_event
-
 import json
+import re
+from datetime import datetime, timedelta, time
+
+from dateutil import parser
+from dateutil.relativedelta import relativedelta
+
+from .calendar_service import (
+    list_events_for_day,
+    list_upcoming_events,
+    create_calendar_event,
+)
+from .planning_service import generate_daily_plan, generate_weekly_summary
+
+
+WEEKDAYS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+CREATE_RE = re.compile(
+    r"\b(add|create|schedule|book|set up)\b.*\b(event|meeting|appointment|call)\b",
+    re.IGNORECASE,
+)
+
+TIME_RE = re.compile(
+    r"(?<![/\d])(?:\bat\s+|@)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b(?!/\d)",
+    re.IGNORECASE,
+)
+
+DATE_RE = re.compile(
+    r"\b("
+    r"today|tomorrow|tommorow|tmrw|tmr|tmw|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|"
+    r"\d{1,2}(?:st|nd|rd|th)?|"
+    r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+TITLE_RE = re.compile(
+    r'\b(?:title|titled|called|named)\s+["“]?(.+?)["”]?(?=\s+(?:for|on|at|from|to|tomorrow|today|tmr|tmrw|description|location)\b|$)',
+    re.IGNORECASE,
+)
+
+RANGE_RE = re.compile(
+    r"\b(?:from\s+)?(.+?)\s+(?:to|until|through)\s+(.+?)(?=\s+(?:location|description)\b|$)",
+    re.IGNORECASE,
+)
+
+COMPACT_RANGE_RE = re.compile(
+    r"\bfrom\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*-\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?=\s|$)",
+    re.IGNORECASE,
+)
+
 
 def _format_event(event: dict) -> str:
     title = event.get("title", "Untitled")
@@ -39,29 +91,10 @@ def _format_events(date_label: str, events: list[dict]) -> str:
     event_lines = "\n".join(_format_event(event) for event in events)
     return f"Here’s your calendar for {date_label}:\n{event_lines}"
 
+
 def _start_of_week(date):
     days_since_sunday = (date.weekday() + 1) % 7
     return date - timedelta(days=days_since_sunday)
-
-import json
-import re
-from datetime import datetime, timedelta, time
-from dateutil import parser
-
-CREATE_RE = re.compile(
-    r"\b(add|create|schedule|book|set up)\b.*\b(event|meeting|appointment|call)\b",
-    re.IGNORECASE,
-)
-
-TIME_RE = re.compile(
-    r"(?:\bat\s+|@)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
-    re.IGNORECASE,
-)
-
-TITLE_RE = re.compile(
-    r'\b(?:title|titled|called|named)\s+["“]?(.+?)["”]?(?=\s+(?:for|on|at|from|to|tomorrow|today|tmr|tmrw|description|location)\b|$)',
-    re.IGNORECASE,
-)
 
 
 def _default_title(text: str) -> str:
@@ -77,66 +110,128 @@ def _default_title(text: str) -> str:
     return "New Event"
 
 
-def _resolve_date(text: str) -> datetime.date:
-    lowered = text.lower()
-    today = datetime.now().date()
+def _has_date(text: str) -> bool:
+    return bool(DATE_RE.search(text))
 
-    if any(word in lowered for word in ["tomorrow", "tommorow", "tmrw", "tmr"]):
-        return today + timedelta(days=1)
 
-    if "today" in lowered:
-        return today
-
-    try:
-        return parser.parse(text, fuzzy=True).date()
-    except Exception:
-        return today
-
-WEEKDAYS = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
-}
-
-RANGE_RE = re.compile(
-    r"\bfrom\s+(.+?)\s+(?:to|until|through)\s+(.+?)(?=\s+(?:location|description)\b|$)",
-    re.IGNORECASE,
-)
-
-COMPACT_RANGE_RE = re.compile(
-    r"\bfrom\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*-\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?=\s|$)",
-    re.IGNORECASE,
-)
+def _has_time(text: str) -> bool:
+    return bool(TIME_RE.search(text))
 
 
 def _next_weekday(target_weekday: int, base_date: datetime.date) -> datetime.date:
     days_ahead = (target_weekday - base_date.weekday()) % 7
     return base_date + timedelta(days=days_ahead)
 
+MONTHS = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
 
-def _resolve_date_from_text(text: str, fallback_text: str = "") -> datetime.date:
-    lowered = f"{text} {fallback_text}".lower()
+
+def _clean_date_text(text: str) -> str:
+    return re.sub(
+        r"\b(for|on|at|from|to|until|through|called|named|titled|title)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _parse_explicit_date(text: str) -> datetime.date | None:
     today = datetime.now().date()
+    cleaned = _clean_date_text(text.lower())
 
-    if any(word in lowered for word in ["tomorrow", "tommorow", "tmrw", "tmr"]):
+    slash_match = re.search(
+        r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b",
+        cleaned,
+    )
+    if slash_match:
+        month = int(slash_match.group(1))
+        day = int(slash_match.group(2))
+        year = int(slash_match.group(3)) if slash_match.group(3) else today.year
+
+        if year < 100:
+            year += 2000
+
+        return datetime(year, month, day).date()
+
+    month_names = "|".join(MONTHS.keys())
+
+    month_day_match = re.search(
+        rf"\b({month_names})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?\b",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if month_day_match:
+        month = MONTHS[month_day_match.group(1).lower()]
+        day = int(month_day_match.group(2))
+        year = int(month_day_match.group(3)) if month_day_match.group(3) else today.year
+
+        return datetime(year, month, day).date()
+
+    day_month_match = re.search(
+        rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({month_names})(?:,?\s+(\d{{4}}))?\b",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if day_month_match:
+        day = int(day_month_match.group(1))
+        month = MONTHS[day_month_match.group(2).lower()]
+        year = int(day_month_match.group(3)) if day_month_match.group(3) else today.year
+
+        return datetime(year, month, day).date()
+
+    day_only_match = re.search(
+        r"\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\b",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if day_only_match:
+        day = int(day_only_match.group(1))
+        return datetime(today.year, today.month, day).date()
+
+    return None
+
+def _resolve_date_from_text(
+    text: str,
+    fallback_text: str = "",
+    *,
+    fallback_date: datetime.date | None = None,
+) -> datetime.date:
+    today = datetime.now().date()
+    lowered = text.lower()
+
+    if any(word in lowered for word in ["tomorrow", "tommorow", "tmrw", "tmr", "tmw"]):
         return today + timedelta(days=1)
 
     if "today" in lowered:
         return today
 
+    explicit_date = _parse_explicit_date(text)
+    if explicit_date:
+        return explicit_date
+
     for name, index in WEEKDAYS.items():
-        if name in lowered:
+        if re.search(rf"\b{name}\b", lowered):
             return _next_weekday(index, today)
 
-    try:
-        return parser.parse(lowered, fuzzy=True).date()
-    except Exception:
-        return today
+    if fallback_date:
+        return fallback_date
 
+    if fallback_text:
+        return _resolve_date_from_text(fallback_text)
+
+    return today
 
 def _parse_clock(text: str, inherited_meridiem: str | None = None) -> time:
     match = TIME_RE.search(text)
@@ -153,6 +248,7 @@ def _parse_clock(text: str, inherited_meridiem: str | None = None) -> time:
 
     if meridiem:
         meridiem = meridiem.lower()
+
         if meridiem == "pm" and hour != 12:
             hour += 12
         elif meridiem == "am" and hour == 12:
@@ -165,21 +261,70 @@ def _parse_clock(text: str, inherited_meridiem: str | None = None) -> time:
 
 def _meridiem_from_text(text: str) -> str | None:
     match = TIME_RE.search(text)
+
     if not match:
         return None
+
     return match.group(3).lower() if match.group(3) else None
+
+
+def _pending_event_response(missing_fields: list[str], draft: dict) -> str:
+    readable = {
+        "title": "title",
+        "date": "date",
+        "time": "time",
+    }
+
+    labels = [readable[field] for field in missing_fields]
+
+    if len(labels) == 1:
+        message = f"Add a {labels[0]}."
+    elif len(labels) == 2:
+        message = f"Add a {labels[0]} and {labels[1]}."
+    else:
+        message = f"Add a {', '.join(labels[:-1])}, and {labels[-1]}."
+
+    return (
+        f"{message}\n"
+        f"__ALFRED_PENDING_EVENT__={json.dumps({
+            'missing_fields': missing_fields,
+            'draft': draft,
+        })}"
+    )
+
+
+def _extract_created_datetime(created: dict, key: str, fallback: datetime) -> str:
+    value = created.get(key)
+
+    if isinstance(value, dict):
+        return value.get("dateTime") or value.get("date") or fallback.isoformat()
+
+    if isinstance(value, str):
+        return value
+
+    return fallback.isoformat()
+
+
+def _strip_date_prefix(text: str) -> str:
+    return re.sub(r"^\s*(for|on)\s+", "", text.strip(), flags=re.IGNORECASE)
+
+
+def _part_has_time(text: str) -> bool:
+    return bool(TIME_RE.search(text))
 
 
 def _parse_event_window(text: str) -> tuple[datetime, datetime, str]:
     compact_match = COMPACT_RANGE_RE.search(text)
-    full_match = RANGE_RE.search(text)
+    range_match = RANGE_RE.search(text)
 
     if compact_match:
         start_part = compact_match.group(1)
         end_part = compact_match.group(2)
 
+        date_part = text[:compact_match.start()] + text[compact_match.end():]
+        start_date = _resolve_date_from_text(date_part)
+
         end_meridiem = _meridiem_from_text(end_part)
-        start_date = _resolve_date_from_text(text)
 
         start = datetime.combine(start_date, _parse_clock(start_part, end_meridiem))
         end = datetime.combine(start_date, _parse_clock(end_part))
@@ -190,23 +335,38 @@ def _parse_event_window(text: str) -> tuple[datetime, datetime, str]:
         cleaned_text = text[:compact_match.start()] + text[compact_match.end():]
         return start, end, cleaned_text.strip()
 
-    if full_match:
-        start_part = full_match.group(1)
-        end_part = full_match.group(2)
+    if range_match:
+        start_part = _strip_date_prefix(range_match.group(1))
+        end_part = _strip_date_prefix(range_match.group(2))
 
         start_date = _resolve_date_from_text(start_part, text)
-        end_date = _resolve_date_from_text(end_part, text)
+        end_date = _resolve_date_from_text(end_part, fallback_date=start_date)
 
-        start = datetime.combine(start_date, _parse_clock(start_part))
-        end = datetime.combine(end_date, _parse_clock(end_part))
+        start_has_time = _part_has_time(start_part)
+        end_has_time = _part_has_time(end_part)
+
+        if start_has_time:
+            end_meridiem = _meridiem_from_text(end_part)
+            start_time = _parse_clock(start_part, end_meridiem)
+        else:
+            start_time = time(0, 0)
+
+        if end_has_time:
+            end_time = _parse_clock(end_part)
+        else:
+            end_time = time(23, 59)
+
+        start = datetime.combine(start_date, start_time)
+        end = datetime.combine(end_date, end_time)
 
         if end <= start:
             end += timedelta(days=1)
 
-        cleaned_text = text[:full_match.start()] + text[full_match.end():]
+        cleaned_text = text[:range_match.start()] + text[range_match.end():]
         return start, end, cleaned_text.strip()
 
     time_match = TIME_RE.search(text)
+
     if not time_match:
         raise ValueError("Missing time")
 
@@ -233,9 +393,6 @@ def _try_create_event(command: str) -> str | None:
         has_explicit_title = True
         text = text[:title_match.start()] + text[title_match.end():]
 
-    if not has_explicit_title:
-        return 'Add a title. Try: create an event title "Dentist" for tomorrow at 5:30pm'
-
     text = re.sub(
         r"^\s*(please\s+)?(can you\s+)?(add|create|schedule|book|set up)\s+(an?\s+)?(calendar\s+)?(event|meeting|appointment|call)?",
         "",
@@ -249,20 +406,60 @@ def _try_create_event(command: str) -> str | None:
         description = description_match.group(1).strip()
         text = text[:description_match.start()].strip()
 
-    try:
-        start, end, date_text = _parse_event_window(text)
-    except ValueError:
-        return (
-            "I can create that event, but I need a time. "
-            'Try: create an event for tmrw called "test 2" from 9-11pm'
-        )
-
-    location_match = re.search(r"\b(?:location)\s+(.+)$", date_text, re.IGNORECASE)
     location = None
-
+    location_match = re.search(r"\blocation\s+(.+)$", text, re.IGNORECASE)
     if location_match:
         location = location_match.group(1).strip()
-        date_text = date_text[:location_match.start()].strip()
+        text = text[:location_match.start()].strip()
+
+    missing_fields = []
+
+    if not has_explicit_title:
+        missing_fields.append("title")
+
+    if not _has_time(text):
+        missing_fields.append("time")
+
+    if missing_fields:
+        draft = {
+            "title": title if has_explicit_title else "",
+            "date": datetime.now().date().isoformat(),
+            "end_date": "",
+            "start_time": "",
+            "end_time": "",
+            "location": location,
+            "description": description,
+        }
+
+        try:
+            start, end, _ = _parse_event_window(text)
+            draft["date"] = start.date().isoformat()
+            draft["end_date"] = end.date().isoformat()
+            draft["start_time"] = start.strftime("%H:%M")
+            draft["end_time"] = end.strftime("%H:%M")
+        except ValueError:
+            try:
+                target_date = _resolve_date_from_text(text)
+                draft["date"] = target_date.isoformat()
+            except Exception:
+                pass
+
+        return _pending_event_response(missing_fields, draft)
+
+    try:
+        start, end, _ = _parse_event_window(text)
+    except ValueError:
+        draft = {
+            "title": title if has_explicit_title else "",
+            "date": "",
+            "end_date": "",
+            "start_time": "",
+            "end_time": "",
+            "location": location,
+            "description": description,
+        }
+
+        return _pending_event_response(["date", "time"], draft)
 
     created = create_calendar_event(
         title=title,
@@ -275,29 +472,30 @@ def _try_create_event(command: str) -> str | None:
     event_payload = {
         "id": created.get("id"),
         "title": created.get("title", title),
-        "start": created.get("start", start.isoformat()),
-        "end": created.get("end", end.isoformat()),
-        "location": created.get("location") or location,
-        "description": created.get("description") or description,
+        "start": _extract_created_datetime(created, "start", start),
+        "end": _extract_created_datetime(created, "end", end),
+        "location": location,
+        "description": description,
     }
 
     duration = end - start
-    duration_hours = duration.total_seconds() / 3600
+    total_minutes = int(duration.total_seconds() / 60)
 
-    duration_text = (
-        f"{int(duration_hours)} hour{'s' if duration_hours != 1 else ''}"
-        if duration_hours.is_integer()
-        else f"{int(duration.total_seconds() / 60)} minutes"
-    )
+    if total_minutes % 60 == 0:
+        hours = total_minutes // 60
+        duration_text = f"{hours} hour{'s' if hours != 1 else ''}"
+    else:
+        duration_text = f"{total_minutes} minutes"
 
     return (
-        f"Created event: {created['title']}\n"
+        f"Created event: {title}\n"
         f"When: {start.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}\n"
         f"Ends: {end.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}\n"
         f"Duration: {duration_text}\n"
         f"Location: {location or 'None'}\n"
-        f"__ALFRED_CALENDAR_EVENT__={json.dumps(created)}"
+        f"__ALFRED_CALENDAR_EVENT__={json.dumps(event_payload)}"
     )
+
 
 def handle_calendar_command(command: str) -> str | None:
     text = command.lower().strip()
@@ -332,7 +530,6 @@ def handle_calendar_command(command: str) -> str | None:
     if not is_calendar_request:
         return None
 
-    # TOMORROW must come before upcoming/next logic
     if "tomorrow" in text or "tommorow" in text or "tmrw" in text or "tmr" in text:
         target = today + timedelta(days=1)
 
@@ -346,7 +543,7 @@ def handle_calendar_command(command: str) -> str | None:
             ) or "No clean focus blocks found."
 
             return (
-                f"Tomorrow's Plan\n\n"
+                "Tomorrow's Plan\n\n"
                 f"Recommendations\n{recs}\n\n"
                 f"Open Focus Blocks\n{blocks}"
             )

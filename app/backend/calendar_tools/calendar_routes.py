@@ -108,6 +108,10 @@ def update_event(event_id: str, payload: EventUpdateRequest):
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
 
+@router.put("/event/{event_id}")
+def update_event_put(event_id: str, payload: EventUpdateRequest):
+    return update_event(event_id, payload)
+
 @router.post("/reminder")
 def add_reminder(payload: ReminderCreateRequest):
     return create_reminder(

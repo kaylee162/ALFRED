@@ -1,0 +1,22 @@
+edit event does work
+
+edit button matches save & cancel button
+
+clean up app.css
+clean up app.tsx
+
+multi day chat is a bit wanky (Friday 9pm to Saturday at 11pm doesn't work)
+could be fixed by improving chat system to be more intelligent 
+
+overall make chat system more intelligent / advanced
+use OPENAI natural language system to better process commands!!!!!
+
+____
+
+run backend
+cd app/backend
+.\.venv\Scripts\Activate.ps1
+
+run frontend
+cd app/frontend
+npm run dev
