@@ -7,6 +7,7 @@ SAFE_ROOTS = [
     Path.home() / "Desktop",
     Path.home() / "Downloads",
     Path.home() / "Documents",
+    Path.home() / "src",
 ]
 
 SCREENSHOT_KEYWORDS = ["screenshot", "screen shot"]

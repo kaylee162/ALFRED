@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-SOURCE_ROOT = Path.home() / "source"
+SOURCE_ROOT = Path.home() / "src"
 
 
 def is_safe_project_path(path: Path) -> bool:

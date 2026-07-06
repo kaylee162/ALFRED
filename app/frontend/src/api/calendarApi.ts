@@ -32,12 +32,13 @@ async function requestJson(
   errorMessage = "Request failed"
 ) {
   const res = await fetch(url, options);
+  const data = await res.json().catch(() => null);
 
   if (!res.ok) {
-    throw new Error(errorMessage);
+    throw new Error(data?.detail || errorMessage);
   }
 
-  return res.json();
+  return data;
 }
 
 export async function connectCalendar() {
@@ -124,7 +125,13 @@ export async function updateCalendarEvent(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(eventData),
+      body: JSON.stringify({
+        title: eventData.title,
+        start_time: eventData.start_time,
+        end_time: eventData.end_time,
+        location: eventData.location || null,
+        description: eventData.description || null,
+      }),
     },
     "Failed to update calendar event"
   );
