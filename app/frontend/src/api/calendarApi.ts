@@ -137,6 +137,16 @@ export async function updateCalendarEvent(
   );
 }
 
+export async function deleteCalendarEvent(eventId: string) {
+  return requestJson(
+    `${API_BASE}/calendar/event/${encodeURIComponent(eventId)}`,
+    {
+      method: "DELETE",
+    },
+    "Failed to delete calendar event"
+  );
+}
+
 export async function createReminder(reminderData: ReminderPayload) {
   return requestJson(
     `${API_BASE}/calendar/reminder`,

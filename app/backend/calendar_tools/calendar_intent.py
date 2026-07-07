@@ -14,6 +14,13 @@ from .calendar_service import (
 )
 from .planning_service import generate_daily_plan, generate_weekly_summary
 
+from .calendar_service import (
+    list_events_for_day,
+    list_upcoming_events,
+    create_calendar_event,
+    update_calendar_event,
+    delete_calendar_event,
+)
 
 WEEKDAYS = {
     "monday": 0,
@@ -496,10 +503,320 @@ def _try_create_event(command: str) -> str | None:
         f"__ALFRED_CALENDAR_EVENT__={json.dumps(event_payload)}"
     )
 
+UPDATE_RE = re.compile(
+    r"\b(update|edit|change|move|reschedule)\b.*\b(event|meeting|appointment|call)?\b",
+    re.IGNORECASE,
+)
+
+DELETE_RE = re.compile(
+    r"\b(delete|remove|cancel)\b.*\b(event|meeting|appointment|call)?\b",
+    re.IGNORECASE,
+)
+
+
+def _event_time(event: dict) -> datetime | None:
+    try:
+        return parser.parse(event["start"]).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _event_end_time(event: dict) -> datetime | None:
+    try:
+        return parser.parse(event["end"]).replace(tzinfo=None)
+    except Exception:
+        start = _event_time(event)
+        return start + timedelta(hours=1) if start else None
+
+
+def _extract_title_query(text: str) -> str | None:
+    match = re.search(
+        r"\b(?:called|named|titled|title)\s+['\"]?(.+?)['\"]?(?=\s+(?:to|at|on|for|from|location|description)\b|$)",
+        text,
+        re.IGNORECASE,
+    )
+    return match.group(1).strip().lower() if match else None
+
+
+def _extract_search_text(command: str) -> str:
+    text = command.lower()
+
+    # For update commands, search using the part before "to".
+    if re.search(r"\b(update|edit|change|move|reschedule)\b", text):
+        parts = re.split(r"\s+\bto\b\s+", command, maxsplit=1, flags=re.IGNORECASE)
+        return parts[0]
+
+    return command
+
+
+def _extract_target_text(command: str) -> str:
+    parts = re.split(r"\s+\bto\b\s+", command, maxsplit=1, flags=re.IGNORECASE)
+    return parts[1] if len(parts) > 1 else command
+
+
+def _is_tonight(text: str) -> bool:
+    return "tonight" in text.lower()
+
+
+def _matches_time(event: dict, search_text: str) -> bool:
+    if not _has_time(search_text) and not _is_tonight(search_text):
+        return True
+
+    start = _event_time(event)
+    if not start:
+        return False
+
+    if _is_tonight(search_text):
+        return start.hour >= 17
+
+    try:
+        search_time = _parse_clock(search_text)
+    except Exception:
+        return True
+
+    return start.hour == search_time.hour and start.minute == search_time.minute
+
+
+def _find_events_from_command(command: str) -> list[dict]:
+    search_text = _extract_search_text(command)
+    target_date = _resolve_date_from_text(search_text)
+
+    events = list_events_for_day(target_date.isoformat())
+    title_query = _extract_title_query(search_text)
+
+    if title_query:
+        events = [
+            event for event in events
+            if title_query in event.get("title", "").lower()
+        ]
+
+    events = [
+        event for event in events
+        if _matches_time(event, search_text)
+    ]
+
+    return events
+
+
+def _selection_payload(action: str, message: str, events: list[dict]) -> str:
+    return (
+        f"{message}\n"
+        f"__ALFRED_EVENT_OPTIONS__={json.dumps({
+            'action': action,
+            'events': events,
+        })}"
+    )
+
+
+def _format_updated_response(updated: dict) -> str:
+    return (
+        f"Updated event: {updated.get('title', 'Untitled')}\n"
+        f"When: {updated.get('start')}\n"
+        f"Ends: {updated.get('end')}"
+    )
+
+
+def _try_delete_event(command: str) -> str | None:
+    if not DELETE_RE.search(command):
+        return None
+
+    matches = _find_events_from_command(command)
+
+    if not matches:
+        return "Sorry, I couldn't find that event."
+
+    if len(matches) > 1:
+        return _selection_payload(
+            "delete",
+            "I found multiple matching events. Pick the one to delete.",
+            matches,
+        )
+
+    event = matches[0]
+    delete_calendar_event(event["id"])
+
+    return f"Deleted event: {event.get('title', 'Untitled')}"
+
+
+def _try_update_event(command: str) -> str | None:
+    if not UPDATE_RE.search(command):
+        return None
+
+    matches = _find_events_from_command(command)
+
+    if not matches:
+        return "Sorry, I couldn't find that event."
+
+    if len(matches) > 1:
+        return _selection_payload(
+            "update",
+            "I found multiple matching events. Pick the one to update.",
+            matches,
+        )
+
+    event = matches[0]
+
+    current_start = _event_time(event)
+    current_end = _event_end_time(event)
+
+    if not current_start:
+        return "Sorry, I found the event, but couldn't read its start time."
+
+    duration = (
+        current_end - current_start
+        if current_end and current_end > current_start
+        else timedelta(hours=1)
+    )
+
+    target_text = _extract_target_text(command)
+
+    new_title = event.get("title", "Untitled")
+    title_match = TITLE_RE.search(target_text)
+    if title_match:
+        new_title = title_match.group(1).strip().strip('"“”').title()
+
+    new_date = _resolve_date_from_text(
+        target_text,
+        fallback_date=current_start.date(),
+    )
+
+    if _has_time(target_text):
+        new_start = datetime.combine(new_date, _parse_clock(target_text))
+    else:
+        new_start = datetime.combine(new_date, current_start.time())
+
+    new_end = new_start + duration
+
+    updated = update_calendar_event(
+        event_id=event["id"],
+        title=new_title,
+        start_time=new_start.isoformat(),
+        end_time=new_end.isoformat(),
+        location=event.get("location"),
+        description=event.get("description"),
+    )
+
+    return _format_updated_response(updated)
+
+
+def _extract_title_query(text: str) -> str | None:
+    match = re.search(
+        r"\b(?:called|named|titled|title)\s+['\"]?(.+?)['\"]?(?=\s+(?:to|for|on|at|from|location|description)\b|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip().lower()
+
+    return None
+
+
+def _find_matching_events(command: str) -> list[dict]:
+    target_date = _resolve_date_from_text(command)
+    events = list_events_for_day(target_date.isoformat())
+
+    title_query = _extract_title_query(command)
+
+    if title_query:
+        events = [
+            event for event in events
+            if title_query in event.get("title", "").lower()
+        ]
+
+    return events
+
+
+def _try_delete_event(command: str) -> str | None:
+    if not DELETE_RE.search(command):
+        return None
+
+    matches = _find_matching_events(command)
+
+    if not matches:
+        return "I could not find a matching event to delete."
+
+    if len(matches) > 1:
+        lines = "\n".join(
+            f"• {event.get('title', 'Untitled')} — {event.get('start')}"
+            for event in matches
+        )
+        return (
+            "I found multiple matching events. Please be more specific:\n"
+            f"{lines}"
+        )
+
+    event = matches[0]
+    delete_calendar_event(event["id"])
+
+    return f"Deleted event: {event.get('title', 'Untitled')}"
+
+
+def _try_update_event(command: str) -> str | None:
+    if not UPDATE_RE.search(command):
+        return None
+
+    matches = _find_matching_events(command)
+
+    if not matches:
+        return "I could not find a matching event to update."
+
+    if len(matches) > 1:
+        lines = "\n".join(
+            f"• {event.get('title', 'Untitled')} — {event.get('start')}"
+            for event in matches
+        )
+        return (
+            "I found multiple matching events. Please be more specific:\n"
+            f"{lines}"
+        )
+
+    event = matches[0]
+
+    current_start = parser.parse(event["start"])
+    current_end = parser.parse(event["end"])
+    current_duration = current_end - current_start
+
+    new_title = event.get("title", "Untitled")
+    title_match = TITLE_RE.search(command)
+    if title_match:
+        new_title = title_match.group(1).strip().strip('"“”').title()
+
+    try:
+        new_start, new_end, _ = _parse_event_window(command)
+    except Exception:
+        new_start = current_start.replace(tzinfo=None)
+        new_end = new_start + current_duration
+
+    if "to" in command.lower() and _has_time(command):
+        new_end = new_start + current_duration
+
+    updated = update_calendar_event(
+        event_id=event["id"],
+        title=new_title,
+        start_time=new_start.isoformat(),
+        end_time=new_end.isoformat(),
+        location=event.get("location"),
+        description=event.get("description"),
+    )
+
+    return (
+        f"Updated event: {updated.get('title', new_title)}\n"
+        f"When: {new_start.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}\n"
+        f"Ends: {new_end.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}"
+    )
+
 
 def handle_calendar_command(command: str) -> str | None:
     text = command.lower().strip()
     today = datetime.now().date()
+
+    delete_response = _try_delete_event(command)
+    if delete_response:
+        return delete_response
+
+    update_response = _try_update_event(command)
+    if update_response:
+        return update_response
 
     create_response = _try_create_event(command)
     if create_response:

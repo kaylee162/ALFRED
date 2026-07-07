@@ -10,6 +10,14 @@ from tools.project_launcher import (
     list_project_folder,
 )
 
+from tools.file_manager import (
+    search_files,
+    list_folder,
+    recent_downloads,
+    read_text_file,
+    open_path,
+)
+
 app = FastAPI(title="ALFRED Backend")
 
 app.add_middleware(
@@ -37,6 +45,26 @@ class ProjectFolderRequest(BaseModel):
 class OpenProjectRequest(BaseModel):
     path: str
 
+class SearchFilesRequest(BaseModel):
+    query: str
+    limit: int = 25
+
+
+class FolderRequest(BaseModel):
+    path: str | None = None
+
+
+class RecentDownloadsRequest(BaseModel):
+    days: int = 7
+    limit: int = 25
+
+
+class ReadFileRequest(BaseModel):
+    path: str
+
+
+class OpenPathRequest(BaseModel):
+    path: str
 
 @app.get("/")
 def health_check():
@@ -51,6 +79,30 @@ def projects_list(request: ProjectFolderRequest):
 @app.post("/projects/open")
 def projects_open(request: OpenProjectRequest):
     return open_project_path(request.path)
+
+@app.post("/files/search")
+def files_search(request: SearchFilesRequest):
+    return search_files(request.query, request.limit)
+
+
+@app.post("/files/list")
+def files_list(request: FolderRequest):
+    return list_folder(request.path)
+
+
+@app.post("/files/recent-downloads")
+def files_recent_downloads(request: RecentDownloadsRequest):
+    return recent_downloads(request.days, request.limit)
+
+
+@app.post("/files/read")
+def files_read(request: ReadFileRequest):
+    return read_text_file(request.path)
+
+
+@app.post("/files/open")
+def files_open(request: OpenPathRequest):
+    return open_path(request.path)
 
 @app.post("/command")
 def handle_command(request: CommandRequest):

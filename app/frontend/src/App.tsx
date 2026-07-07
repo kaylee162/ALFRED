@@ -16,7 +16,9 @@ import {
   createCalendarEvent,
   createCalendarEventFromForm,
   updateCalendarEvent,
+  deleteCalendarEvent,
 } from "./api/calendarApi";
+
 import "./App.css";
 
 type ProjectItem = {
@@ -42,6 +44,11 @@ type CalendarEvent = {
   end?: string;
   location?: string | null;
   description?: string | null;
+};
+
+type EventOptionsPayload = {
+  action: "update" | "delete";
+  events: CalendarEvent[];
 };
 
 type TomorrowPlan = {
@@ -123,6 +130,17 @@ function normalizeEditableEvent(raw: any): EditableCalendarEvent | null {
   };
 }
 
+function getEventOptionsFromResponse(response: string): EventOptionsPayload | null {
+  const match = response.match(/__ALFRED_EVENT_OPTIONS__=(.+)$/m);
+  if (!match) return null;
+
+  try {
+    return JSON.parse(match[1]) as EventOptionsPayload;
+  } catch {
+    return null;
+  }
+}
+
 function getCreatedEventFromResponse(response: string): EditableCalendarEvent | null {
   const match = response.match(/__ALFRED_CALENDAR_EVENT__=(.+)$/m);
   if (!match) return null;
@@ -149,6 +167,7 @@ function getVisibleResponse(response: string) {
   return response
     .replace(/\n?__ALFRED_CALENDAR_EVENT__=.+$/m, "")
     .replace(/\n?__ALFRED_PENDING_EVENT__=.+$/m, "")
+    .replace(/\n?__ALFRED_EVENT_OPTIONS__=.+$/m, "")
     .trim();
 }
 
@@ -318,11 +337,172 @@ function parseCalendarResponse(response: string) {
   };
 }
 
+function parseWeatherResponse(response: string) {
+  response = getVisibleResponse(response);
+
+  const weeklyMatch = response.match(/^Weather this week for (.+):\n([\s\S]+)/);
+  if (weeklyMatch) {
+    const location = weeklyMatch[1];
+
+    type WeatherDay = {
+      date: string;
+      high: string;
+      low: string;
+      rain: string;
+    };
+
+    const days = weeklyMatch[2]
+      .split("\n")
+      .map((line): WeatherDay | null => {
+        const match = line.match(
+          /^-\s*(\d{4}-\d{2}-\d{2}):\s*High\s*(.+?)°F,\s*low\s*(.+?)°F,\s*rain chance\s*(.+?)%/i
+        );
+
+        if (!match) return null;
+
+        return {
+          date: match[1],
+          high: match[2],
+          low: match[3],
+          rain: match[4],
+        };
+      })
+      .filter((day): day is WeatherDay => day !== null)
+      .sort((a, b) => {
+        const dayA = new Date(`${a.date}T12:00:00`).getDay();
+        const dayB = new Date(`${b.date}T12:00:00`).getDay();
+
+        return dayA - dayB;
+      });
+
+    return { type: "weekly" as const, location, days };
+  }
+
+  const todayMatch = response.match(
+    /^Weather for (.+?): currently (.+?)°F with (.+?)% humidity\. Today's high is (.+?)°F and the low is (.+?)°F\. Chance of rain is up to (.+?)%\./
+  );
+
+  if (todayMatch) {
+    return {
+      type: "single" as const,
+      title: `Weather for ${todayMatch[1]}`,
+      stats: [
+        { label: "Current", value: `${todayMatch[2]}°F` },
+        { label: "Humidity", value: `${todayMatch[3]}%` },
+        { label: "High", value: `${todayMatch[4]}°F` },
+        { label: "Low", value: `${todayMatch[5]}°F` },
+        { label: "Rain", value: `${todayMatch[6]}%` },
+      ],
+    };
+  }
+
+  const tomorrowMatch = response.match(
+    /^Tomorrow in (.+?): high of (.+?)°F, low of (.+?)°F, with up to a (.+?)% chance of rain\./
+  );
+
+  if (tomorrowMatch) {
+    return {
+      type: "single" as const,
+      title: `Tomorrow in ${tomorrowMatch[1]}`,
+      stats: [
+        { label: "High", value: `${tomorrowMatch[2]}°F` },
+        { label: "Low", value: `${tomorrowMatch[3]}°F` },
+        { label: "Rain", value: `${tomorrowMatch[4]}%` },
+      ],
+    };
+  }
+
+  const simpleMatch = response.match(/^(The .+? in .+? is|The chance of rain tomorrow in .+? is up to) (.+?)(\.?)$/);
+
+  if (simpleMatch) {
+    return {
+      type: "single" as const,
+      title: "Weather Update",
+      stats: [{ label: "Result", value: simpleMatch[2] }],
+      note: response,
+    };
+  }
+
+  return null;
+}
+
+function ChatWeatherResponse({ response }: { response: string }) {
+  const parsed = parseWeatherResponse(response);
+
+  if (!parsed) return null;
+
+  if (parsed.type === "weekly") {
+    return (
+      <div className="chat-weather-card">
+        <div className="chat-weather-header centered">
+          <div>
+            <h3>{parsed.location}</h3>
+          </div>
+        </div>
+
+        <div className="chat-weather-week-grid">
+          {parsed.days.map((day) => {
+            const parsedDate = new Date(`${day.date}T12:00:00`);
+
+            return (
+              <div className="chat-weather-day" key={day.date}>
+                <span>
+                  {parsedDate.toLocaleDateString([], {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+
+                <div className="chat-weather-temp-row">
+                  <strong>{day.high}°</strong>
+                  <small>{day.low}°</small>
+                </div>
+
+                <small>Rain {day.rain}%</small>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-weather-card">
+      <div className="chat-weather-header centered">
+        <div>
+          <h3>{parsed.title}</h3>
+        </div>
+      </div>
+
+      <div className="chat-weather-stat-grid">
+        {parsed.stats.map((stat) => (
+          <div className="chat-weather-stat" key={stat.label}>
+            <span>{stat.label}</span>
+            <strong>{stat.value}</strong>
+          </div>
+        ))}
+      </div>
+
+      {"note" in parsed && parsed.note && (
+        <small className="chat-weather-note">{parsed.note}</small>
+      )}
+    </div>
+  );
+}
+
 function ChatCalendarResponse({ response }: { response: string }) {
   const parsed = parseCalendarResponse(response);
   const [openDayIndex, setOpenDayIndex] = useState<number | null>(null);
 
   if (!parsed) {
+    const weatherParsed = parseWeatherResponse(response);
+
+    if (weatherParsed) {
+      return <ChatWeatherResponse response={response} />;
+    }
+
     return <p>{response}</p>;
   }
 
@@ -492,9 +672,36 @@ function ProjectExplorer({
   );
 }
 
+function normalizeProjectItems(items: any[]): ProjectItem[] {
+  if (!Array.isArray(items)) return [];
+
+  return items.map((item) => {
+    if (typeof item === "string") {
+      return {
+        name: item.split(/[\\/]/).pop() || item,
+        path: item,
+        type: "folder",
+        can_open: true,
+      };
+    }
+
+    return {
+      name: item.name || item.title || item.path?.split(/[\\/]/).pop() || "Untitled",
+      path: item.path || item.full_path || item.name || "",
+      type: item.type === "file" ? "file" : "folder",
+      can_open: item.can_open ?? true,
+    };
+  });
+}
+
 function App() {
   const [command, setCommand] = useState("");
   const [response, setResponse] = useState("Systems online. Awaiting command.");
+  const [displayedResponse, setDisplayedResponse] = useState(
+    "Systems online. Awaiting command."
+  );
+  const [isTypingResponse, setIsTypingResponse] = useState(false);
+  const [shouldTypeResponse, setShouldTypeResponse] = useState(false);
   const [projectExplorer, setProjectExplorer] =
     useState<ProjectExplorerData | null>(null);
 
@@ -509,6 +716,7 @@ function App() {
   const [eventDescription, setEventDescription] = useState("");
   const [eventStatus, setEventStatus] = useState("");
   const [eventDurationMinutes, setEventDurationMinutes] = useState(60);
+  const [eventOptions, setEventOptions] = useState<EventOptionsPayload | null>(null);
 
   const [editableEvent, setEditableEvent] =
     useState<EditableCalendarEvent | null>(null);
@@ -528,9 +736,12 @@ function App() {
   const [pendingStatus, setPendingStatus] = useState("");
   
   async function submitCommand() {
-    if (!command.trim()) return;
+    const trimmedCommand = command.trim();
+    if (!trimmedCommand) return;
 
     setResponse("Processing command...");
+    setShouldTypeResponse(false);
+    setEventOptions(null);
 
     try {
       const res = await fetch(`${API_BASE}/command`, {
@@ -538,7 +749,7 @@ function App() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ command }),
+        body: JSON.stringify({ command: trimmedCommand }),
       });
 
       const data = await res.json();
@@ -548,11 +759,15 @@ function App() {
       }
 
       const responseText = data.response || "";
+      const visibleResponse = getVisibleResponse(responseText);
+
       const createdEvent = getCreatedEventFromResponse(responseText);
       const pending = getPendingEventFromResponse(responseText);
+      const eventOptionsPayload = getEventOptionsFromResponse(responseText);
 
       setEditableEvent(createdEvent);
       setPendingEvent(pending);
+      setEventOptions(eventOptionsPayload);
       setIsEditingEvent(false);
 
       if (pending) {
@@ -562,28 +777,44 @@ function App() {
         setPendingEndTime(pending.draft.end_time || "");
       }
 
-      if (data.type === "project_list") {
+      if (data.type === "project_list" || data.type === "projects") {
+        const rawItems = data.items || data.projects || [];
+
         setProjectExplorer({
           success: data.success ?? true,
           message: data.message || data.response || "Showing projects.",
-          root: data.root,
-          current_path: data.current_path,
-          parent_path: data.parent_path,
-          items: data.items || [],
+          root: data.root || data.current_path || "C:\\Users\\alpha\\src",
+          current_path: data.current_path || data.root || "C:\\Users\\alpha\\src",
+          parent_path: data.parent_path || null,
+          items: normalizeProjectItems(rawItems),
         });
 
-        setResponse(getVisibleResponse(responseText) || data.message || "Project explorer loaded.");
+        setShouldTypeResponse(false);
+        setResponse(
+          visibleResponse ||
+            data.message ||
+            data.response ||
+            "Project explorer loaded."
+        );
       } else if (data.type === "project_explorer" && data.project_data) {
-        setProjectExplorer(data.project_data);
-        setResponse(getVisibleResponse(responseText) || "Project explorer loaded.");
+        setProjectExplorer({
+          ...data.project_data,
+          items: normalizeProjectItems(data.project_data.items || []),
+        });
+
+        setShouldTypeResponse(false);
+        setResponse(visibleResponse || "Project explorer loaded.");
       } else {
         setProjectExplorer(null);
-        setResponse(getVisibleResponse(responseText));
+
+        setShouldTypeResponse(data.type === "chat");
+        setResponse(visibleResponse || data.response || "");
       }
 
       setCommand("");
-      loadUpcomingEvents();
-    } catch {
+      await loadUpcomingEvents();
+    } catch (error) {
+      console.error(error);
       setResponse("Backend connection failed.");
     }
   }
@@ -867,9 +1098,77 @@ function App() {
     }
   }
 
+  async function handleDeleteEvent(event: CalendarEvent) {
+    if (!event.id) return;
+
+    const confirmed = window.confirm(`Delete "${event.title}"?`);
+    if (!confirmed) return;
+
+    try {
+      await deleteCalendarEvent(event.id);
+
+      setResponse(`Deleted calendar event: ${event.title}`);
+      setEditableEvent(null);
+      setIsEditingEvent(false);
+
+      await loadUpcomingEvents();
+    } catch {
+      setResponse("Could not delete event.");
+    }
+  }
+
+  async function handleOptionDelete(event: CalendarEvent) {
+    if (!event.id) return;
+
+    try {
+      await deleteCalendarEvent(event.id);
+      setEventOptions(null);
+      setResponse(`Deleted event: ${event.title}`);
+      await loadUpcomingEvents();
+    } catch {
+      setResponse("Could not delete event.");
+    }
+  }
+
+  function handleOptionUpdate(event: CalendarEvent) {
+    const editable = normalizeEditableEvent(event);
+    if (!editable) {
+      setResponse("Could not open that event for editing.");
+      return;
+    }
+
+    setEventOptions(null);
+    openEventEditor(editable);
+  }
+
   useEffect(() => {
     loadUpcomingEvents();
   }, []);
+
+  useEffect(() => {
+    if (!shouldTypeResponse) {
+      setDisplayedResponse(response);
+      setIsTypingResponse(false);
+      return;
+    }
+
+    setDisplayedResponse("");
+    setIsTypingResponse(true);
+
+    let index = 0;
+
+    const timer = window.setInterval(() => {
+      index += 1;
+      setDisplayedResponse(response.slice(0, index));
+
+      if (index >= response.length) {
+        window.clearInterval(timer);
+        setIsTypingResponse(false);
+      }
+    }, 38);
+
+    return () => window.clearInterval(timer);
+  }, [response, shouldTypeResponse]);
 
   return (
     <main className="alfred-shell">
@@ -949,7 +1248,7 @@ function App() {
           <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.4
+              Adaptive Learning Framework for Responsive Executive Decisions V.5
             </p>
           </div>
 
@@ -984,7 +1283,47 @@ function App() {
               />
             ) : (
               <>
-                <ChatCalendarResponse response={response} />
+                <div className="typewriter-response">
+                  <ChatCalendarResponse
+                    response={shouldTypeResponse ? displayedResponse : response}
+                  />
+                </div>
+                
+                {eventOptions && (
+                  <div className="event-options-panel">
+                    <p className="panel-label">
+                      {eventOptions.action === "delete" ? "delete options" : "update options"}
+                    </p>
+
+                    {eventOptions.events.map((event) => (
+                      <div className="event-option-row" key={event.id}>
+                        <div className="event-option-details">
+                          <strong>{event.title}</strong>
+                          <small>
+                            {new Date(event.start).toLocaleString([], {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </small>
+                          {event.location && <small>{event.location}</small>}
+                        </div>
+
+                        {eventOptions.action === "delete" ? (
+                          <button type="button" onClick={() => handleOptionDelete(event)}>
+                            Delete
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => handleOptionUpdate(event)}>
+                            Update
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {pendingEvent && (
                   <form className="event-edit-panel" onSubmit={handlePendingEventSave}>
@@ -1143,6 +1482,14 @@ function App() {
                       >
                         Cancel
                       </button>
+
+                      <button
+                        type="button"
+                        className="event-delete-button event-delete-edit-button"
+                        onClick={() => handleDeleteEvent(editableEvent)}
+                      >
+                        Delete event
+                      </button>
                     </div>
                   </form>
                 )}
@@ -1206,28 +1553,37 @@ function App() {
               <div className="event-list">
                 {events.slice(0, 3).map((event, index) => (
                   <div className="event-item" key={event.id || index}>
-                    <div className="event-time-badge">
-                      {new Date(event.start).toLocaleDateString([], {
-                        weekday: "short",
-                      })}
-                      <strong>
-                        {new Date(event.start).toLocaleTimeString([], {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </strong>
-                    </div>
-
-                    <div className="event-details">
-                      <strong>{event.title}</strong>
-                      <span>
+                    <button
+                      type="button"
+                      className="event-item-main"
+                      onClick={() => {
+                        const editable = normalizeEditableEvent(event);
+                        if (editable) openEventEditor(editable);
+                      }}
+                    >
+                      <div className="event-time-badge">
                         {new Date(event.start).toLocaleDateString([], {
-                          month: "short",
-                          day: "numeric",
+                          weekday: "short",
                         })}
-                      </span>
-                      {event.location && <small>{event.location}</small>}
-                    </div>
+                        <strong>
+                          {new Date(event.start).toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </strong>
+                      </div>
+
+                      <div className="event-details">
+                        <strong>{event.title}</strong>
+                        <span>
+                          {new Date(event.start).toLocaleDateString([], {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                        {event.location && <small>{event.location}</small>}
+                      </div>
+                    </button>
                   </div>
                 ))}
               </div>

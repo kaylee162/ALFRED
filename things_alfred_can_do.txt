@@ -1,0 +1,125 @@
+What ALFRED can understand
+
+General chat / text generation
+
+hi alfred
+hey alfred
+can you explain recursion
+summarize this idea
+write a README for this project
+make this sound more professional
+help me debug this error
+generate a todo list
+brainstorm project ideas
+explain what this code does
+
+Calendar
+
+show me my calendar today
+what’s on my calendar tomorrow
+show upcoming events
+show my events for July 17
+plan my day for tomorrow
+plan my week
+summarize this week
+create an event called Meeting tomorrow at 3pm
+schedule Dentist on August 17 at 7pm
+add an event from Friday at 8pm to Sunday at 1pm called Weekend Plans
+create an event today at 5pm to tomorrow at 8pm called Trip
+
+Projects
+
+show me my projects
+open project explorer
+list my project folders
+show folders in src
+open this project
+open project ALFRED
+open C:\Users\alpha\source\alfred in VS Code
+
+File search
+
+find my resume
+search for screenshots
+find files named budget
+search downloads for pdf
+find folders called alfred
+look for React files
+find my recent downloads
+show downloads from the last 7 days
+
+Folder navigation
+
+show my Downloads folder
+open Downloads
+list my Documents folder
+show what’s inside Desktop
+open this folder
+open C:\Users\alpha\Downloads
+go back to parent folder
+show files in this folder
+
+File opening
+
+open this file
+open my resume
+open the screenshot
+open C:\Users\alpha\Downloads\file.pdf
+open that folder in File Explorer
+
+Reading and summarizing files
+
+read this file
+summarize this markdown file
+summarize my recent downloads
+what is in this text file
+explain this Python file
+summarize this README
+read C:\Users\alpha\Downloads\notes.txt
+
+File organization
+
+create a folder on my Desktop called Screenshots
+move these screenshots to a Screenshots folder
+rename this file to notes.txt
+clean up screenshots from the last 7 days
+
+Weather
+
+what is the weather today
+show me the weather for this week
+what's the weather like tmrw
+what is the high temp today
+what's the humidity today
+what's the chance of rain tomorrow
+what's the weather in New York tomorrow
+
+---
+
+What Ollama has access to
+
+Right now, through ALFRED tools, Ollama can access:
+
+Desktop
+Downloads
+Documents
+C:\Users\alpha\src
+Google Calendar through calendar API
+Project folders inside src
+Text-based files ALFRED is allowed to read
+Recent downloads metadata
+Folder/file names and paths from safe folders
+
+It can work with:
+
+.txt
+.md
+.py
+.js
+.jsx
+.ts
+.tsx
+.json
+.csv
+.html
+.css

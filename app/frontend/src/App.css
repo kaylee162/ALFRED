@@ -1369,6 +1369,31 @@ button:hover {
   }
 }
 
+.typewriter-response {
+  color: #dfffff;
+  font-size: clamp(0.86rem, 1vw, 1rem);
+  line-height: 1.45;
+}
+
+.typewriter-response p {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.typewriter-cursor {
+  display: inline-block;
+  margin-left: 0.15rem;
+  color: #24f6ff;
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: 700;
+  text-shadow:
+    0 0 8px rgba(36, 246, 255, 0.95),
+    0 0 22px rgba(36, 246, 255, 0.55);
+  animation: typewriterBlink 0.9s steps(1) infinite;
+}
+
 /* ================================
    ALFRED Calendar HUD Refresh
 ================================ */
@@ -1436,6 +1461,44 @@ button:hover {
   box-shadow:
     0 0 20px rgba(36, 246, 255, 0.18),
     inset 0 0 20px rgba(36, 246, 255, 0.1);
+}
+
+.event-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.65rem;
+}
+
+.event-item-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  border: 1px solid rgba(87, 211, 255, 0.22);
+  background: rgba(6, 20, 38, 0.72);
+  border-radius: 16px;
+  padding: 0.75rem;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.event-item-main:hover {
+  border-color: rgba(87, 211, 255, 0.55);
+  background: rgba(10, 38, 68, 0.86);
+}
+
+.event-delete-button {
+  border: 1px solid rgba(255, 104, 104, 0.35);
+  background: rgba(255, 104, 104, 0.08);
+  color: #ffb4b4;
+  border-radius: 14px;
+  padding: 0 0.75rem;
+  cursor: pointer;
+}
+
+.event-delete-button:hover {
+  background: rgba(255, 104, 104, 0.18);
 }
 
 .event-time-badge,
@@ -1529,4 +1592,112 @@ button:hover {
     0 0 0 2px rgba(36, 246, 255, 0.14),
     0 0 18px rgba(36, 246, 255, 0.2),
     inset 0 0 18px rgba(36, 246, 255, 0.14);
+}
+
+.chat-weather-card {
+  position: relative;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(36, 246, 255, 0.55);
+  background:
+    linear-gradient(135deg, rgba(0, 30, 48, 0.9), rgba(0, 10, 18, 0.86)),
+    radial-gradient(circle at top right, rgba(36, 246, 255, 0.18), transparent 38%);
+  box-shadow:
+    0 0 22px rgba(36, 246, 255, 0.2),
+    inset 0 0 28px rgba(36, 246, 255, 0.08);
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+}
+
+.chat-weather-header {
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid rgba(36, 246, 255, 0.22);
+  text-align: center;
+}
+
+.chat-weather-header h3 {
+  margin: 0;
+  color: #e8ffff;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+}
+
+.chat-weather-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 0.6rem;
+}
+
+.chat-weather-week-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.chat-weather-stat,
+.chat-weather-day {
+  border: 1px solid rgba(36, 246, 255, 0.34);
+  background:
+    linear-gradient(135deg, rgba(0, 238, 255, 0.08), rgba(0, 67, 112, 0.1)),
+    rgba(0, 12, 18, 0.78);
+  box-shadow:
+    inset 0 0 18px rgba(36, 246, 255, 0.07),
+    0 0 12px rgba(36, 246, 255, 0.08);
+}
+
+.chat-weather-stat {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem;
+}
+
+.chat-weather-day {
+  width: calc(25% - 0.75rem);
+  min-width: 92px;
+  min-height: 112px;
+  padding: 0.9rem;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: 0.55rem;
+}
+
+.chat-weather-stat span,
+.chat-weather-day span,
+.chat-weather-day small,
+.chat-weather-note {
+  color: rgba(219, 254, 255, 0.68);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.chat-weather-stat strong,
+.chat-weather-temp-row strong {
+  color: #f2ffff;
+  font-size: 1.15rem;
+  text-shadow: 0 0 10px rgba(36, 246, 255, 0.35);
+}
+
+.chat-weather-temp-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.45rem;
+}
+
+.chat-weather-temp-row small {
+  color: rgba(219, 254, 255, 0.7);
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+@media (max-width: 620px) {
+  .chat-weather-day {
+    width: calc(50% - 0.75rem);
+  }
 }

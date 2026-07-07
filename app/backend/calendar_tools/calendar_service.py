@@ -206,6 +206,19 @@ def update_calendar_event(
         "htmlLink": updated_event.get("htmlLink"),
     }
 
+def delete_calendar_event(event_id: str) -> dict[str, Any]:
+    service = get_calendar_service()
+
+    service.events().delete(
+        calendarId="primary",
+        eventId=event_id,
+    ).execute()
+
+    return {
+        "success": True,
+        "deleted_event_id": event_id,
+    }
+
 def create_reminder(
     title: str,
     reminder_time: str,

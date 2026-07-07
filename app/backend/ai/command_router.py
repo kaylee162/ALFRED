@@ -1,320 +1,397 @@
-import json
-import re
-from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ai.ollama_client import chat_with_ollama
-from tools.file_manager import (
-    search_files,
-    open_path,
-    create_folder,
-    preview_screenshot_cleanup,
-    move_files,
-    rename_file,
-)
-from tools.project_launcher import (
-    list_project_folder,
-    open_project_path,
-)
+from ai.tool_executor import execute_tool_call
+from ai.alfred_tools import ALFRED_TOOLS
 
-pending_action = None
+TIMEZONE = "America/New_York"
+
+import re
 
 
-def _ollama(prompt: str) -> str:
-    try:
-        result = chat_with_ollama(prompt)
+def _normalize_command(command: str) -> str:
+    text = command.strip()
 
-        if isinstance(result, dict):
-            return result.get("response") or result.get("message") or str(result)
+    # Remove wake word at the beginning.
+    text = re.sub(
+        r"^(?:(?:hi|hey|hello|ok|okay)\s+)?alfred[:,!\s]*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
 
-        return str(result)
+    # Remove polite prefixes.
+    text = re.sub(
+        r"^(?:can you|could you|would you|will you|please)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
 
-    except Exception as e:
-        return json.dumps({
-            "tool": "chat",
-            "args": {
-                "message": f"I had trouble reaching Ollama: {e}"
-            }
-        })
+    return text.strip()
 
-def _extract_json(text: str) -> dict:
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
+def _extract_weather_location(command: str) -> str:
+    text = command.strip()
 
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return {"tool": "chat", "args": {"message": text}}
+    patterns = [
+        r"\bin\s+(.+)$",
+        r"\bfor\s+(.+)$",
+        r"\bat\s+(.+)$",
+    ]
 
-    try:
-        return json.loads(match.group(0))
-    except Exception:
-        return {"tool": "chat", "args": {"message": text}}
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            location = match.group(1).strip()
+
+            # Clean common trailing forecast words
+            location = re.sub(
+                r"\b(today|tomorrow|tmrw|this week|weekly|right now|now)\b",
+                "",
+                location,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            if location:
+                return location
+
+    return "Atlanta"
+
+TOOL_KEYWORDS = [
+    "project",
+    "projects",
+    "source",
+    "src",
+    "folder",
+    "folders",
+    "open",
+    "launch",
+    "calendar",
+    "event",
+    "meeting",
+    "appointment",
+    "schedule",
+    "email",
+    "emails",
+    "inbox",
+    "summarize my emails",
+    "files",
+    "file",
+    "downloads",
+    "desktop",
+    "documents",
+    "move",
+    "rename",
+    "delete",
+    "weather",
+    "forecast",
+    "temperature",
+    "temp",
+    "humidity",
+    "rain",
+    "precipitation",
+    "high temp",
+    "low temp",
+]
 
 
-def _tool_prompt(command: str) -> str:
+CHAT_KEYWORDS = [
+    "hello",
+    "hi",
+    "hey",
+    "what is",
+    "what are",
+    "explain",
+    "define",
+    "tell me about",
+    "how does",
+    "why does",
+]
+
+
+def _system_prompt() -> str:
+    now = datetime.now(ZoneInfo(TIMEZONE))
+
     return f"""
-You are ALFRED or alfred, a local desktop assistant.
+You are ALFRED, a local desktop assistant.
 
-Choose exactly one tool for the user's request.
+Today's date is {now.date().isoformat()}.
+The user's timezone is {TIMEZONE}.
+
+Your job is to understand the user's natural language command and either:
+1. call the correct tool, or
+2. ask for missing information.
+
+You have two modes:
+
+1. CHAT MODE
+Use this for normal AI assistant conversations, explanations, questions, brainstorming, coding help, and casual conversation.
+Examples:
+- hello
+- what is dark matter?
+- explain recursion
+- help me think through this project idea
+- write a quick paragraph about APIs
+
+2. TOOL MODE
+Use this only when the user wants ALFRED to act on local tools or connected services.
+Examples:
+- show me my projects
+- open my portfolio project
+- create an event tomorrow at 5pm called meeting
+- show my calendar
+- summarize my emails
+- find screenshots
+- move files
+- rename a file
 
 Available tools:
-- chat: for greetings or normal conversation
-- search_files: find files or folders by name
-- open_path: open a file or folder by exact path
-- create_folder: create a folder at a path
-- preview_screenshot_cleanup: find recent screenshots on Desktop/Downloads before moving them
-- move_files: move files to a destination folder, only after confirmation
-- rename_file: rename a file, only after confirmation
-- list_project_folder: show projects or list a project folder
-- open_project_path: open a project folder in VS Code
+{ALFRED_TOOLS}
 
-Return only valid JSON in this format:
+Decide whether the user needs a tool or normal chat.
+
+If a tool is needed, respond ONLY as JSON:
 {{
+  "mode": "tool",
   "tool": "tool_name",
-  "args": {{
-    "query": "",
-    "path": "",
-    "folder_path": "",
-    "days": 7,
-    "file_paths": [],
-    "destination": "",
-    "new_name": "",
-    "message": ""
+  "arguments": {{
+    "key": "value"
   }}
 }}
 
-Rules:
-- If the user wants to see projects, use list_project_folder.
-- If the user wants to open a project in VS Code and gives a path, use open_project_path.
-- If the user asks to find/search/look for something, use search_files.
-- If the user asks to clean up screenshots, use preview_screenshot_cleanup.
-- If important info is missing, use chat and ask one short follow-up question.
-- Do not invent exact file paths.
+If no tool is needed, respond ONLY as JSON:
+{{
+  "mode": "chat"
+}}
 
-User request:
-{command}
+Calendar rules:
+- Today's date is {now.date().isoformat()}.
+- The user's timezone is {TIMEZONE}.
+- If a calendar request has no date, assume today.
+- If a date has no month, assume the current month.
+- If a date has no year, assume the current year.
+- Support multi-day events.
+
+Weather rules:
+- Use weather tools for weather, forecast, temperature, humidity, rain, precipitation, highs, and lows.
+- If no location is given, assume Atlanta.
+- Understand "tmrw" and "tomorrow" as tomorrow.
+- Understand "this week" as the next 7 days.
+- For "weather today", call get_weather_today.
+- For "weather tomorrow", call get_weather_tomorrow.
+- For "weather this week", call get_weather_week.
+- For "high temp today", call get_high_today.
+- For "humidity today", call get_humidity_today.
+- For "chance of rain tomorrow", call get_rain_chance_tomorrow.
+
+Tool rules:
+- When a user asks to do something ALFRED can do, call the correct tool.
+- Do not say you are showing or opening something unless a tool was actually called.
 """
 
 
+def _chat_prompt(command: str) -> str:
+    return f"""
+You are ALFRED, a helpful local AI assistant.
+
+Respond naturally and clearly. Keep answers useful but not overly long unless the user asks for detail.
+
+User: {command}
+"""
+
+
+def _looks_like_tool_request(command: str) -> bool:
+    text = command.lower()
+
+    return any(keyword in text for keyword in TOOL_KEYWORDS)
+
+
+def _looks_like_chat_request(command: str) -> bool:
+    text = command.lower()
+
+    return any(text.startswith(keyword) for keyword in CHAT_KEYWORDS)
+
+
+def _classify_command(command: str) -> dict:
+    """
+    First use lightweight deterministic checks.
+    Then fall back to Ollama JSON classification.
+    """
+
+    command = _normalize_command(command)
+    text = command.lower()
+    location = _extract_weather_location(command)
+
+    # Strong tool shortcuts
+    if "show me my projects" in text or "list my projects" in text:
+        return {
+            "mode": "tool",
+            "tool": "list_projects",
+            "arguments": {},
+        }
+
+    if text.startswith("open project ") or text.startswith("launch project "):
+        project_name = (
+            text.replace("open project", "", 1)
+            .replace("launch project", "", 1)
+            .strip()
+        )
+        return {
+            "mode": "tool",
+            "tool": "open_project",
+            "arguments": {
+                "name": project_name,
+            },
+        }
+
+    if any(
+        phrase in text
+        for phrase in [
+            "calendar",
+            "event",
+            "events",
+            "meeting",
+            "meetings",
+            "appointment",
+            "appointments",
+            "schedule",
+            "create event",
+            "create an event",
+            "add event",
+            "add an event",
+            "delete event",
+            "delete the event",
+            "remove event",
+            "cancel event",
+            "update event",
+            "update the event",
+            "edit event",
+            "change event",
+            "move event",
+            "reschedule",
+        ]
+    ):
+        return {
+            "mode": "tool",
+            "tool": "calendar",
+            "arguments": {
+                "command": command,
+            },
+        }
+
+    if any(phrase in text for phrase in ["my emails", "my inbox", "summarize emails", "summarize my emails"]):
+        return {
+            "mode": "tool",
+            "tool": "email",
+            "arguments": {
+                "command": command,
+            },
+        }
+    
+    if any(
+        phrase in text
+        for phrase in [
+            "weather",
+            "forecast",
+            "temperature",
+            "temp",
+            "humidity",
+            "rain",
+            "precipitation",
+            "chance of rain",
+            "high temp",
+            "low temp",
+        ]
+    ):
+        location = _extract_weather_location(command)
+
+        if "humidity" in text:
+            return {
+                "mode": "tool",
+                "tool": "get_humidity_today",
+                "arguments": {"location": location},
+            }
+
+        if "chance of rain" in text or "rain chance" in text or "precipitation" in text:
+            if "tomorrow" in text or "tmrw" in text:
+                return {
+                    "mode": "tool",
+                    "tool": "get_rain_chance_tomorrow",
+                    "arguments": {"location": location},
+                }
+
+        if "high" in text:
+            return {
+                "mode": "tool",
+                "tool": "get_high_today",
+                "arguments": {"location": location},
+            }
+
+        if "tomorrow" in text or "tmrw" in text:
+            return {
+                "mode": "tool",
+                "tool": "get_weather_tomorrow",
+                "arguments": {"location": location},
+            }
+
+        if "week" in text or "weekly" in text or "7 day" in text:
+            return {
+                "mode": "tool",
+                "tool": "get_weather_week",
+                "arguments": {"location": location},
+            }
+
+        return {
+            "mode": "tool",
+            "tool": "get_weather_today",
+            "arguments": {"location": location},
+        }
+    
+    # Strong chat shortcuts
+    if _looks_like_chat_request(command) and not _looks_like_tool_request(command):
+        return {
+            "mode": "chat",
+        }
+
+    # Fall back to Ollama classification
+    raw = chat_with_ollama(
+        f"{_system_prompt()}\n\nUser command:\n{command}"
+    )
+
+    try:
+        import json
+        return json.loads(raw)
+    except Exception:
+        return {
+            "mode": "chat",
+        }
+
+
 def handle_ai_command(command: str) -> dict:
-    global pending_action
+    command = _normalize_command(command)
 
-    normalized = command.strip().lower()
+    decision = _classify_command(command)
 
-    if normalized in [
-        "show me my projects",
-        "show projects",
-        "my projects",
-        "list projects",
-        "open projects",
-    ]:
-        result = list_project_folder()
-        return {
-            "response": result["message"],
-            "requires_confirmation": False,
-            "type": "project_list",
-            **result,
-        }
+    if decision.get("mode") == "tool":
+        tool_name = decision.get("tool")
+        arguments = decision.get("arguments", {})
 
-    if normalized in ["yes", "confirm", "do it", "yep", "yeah"]:
-        if not pending_action:
-            return {
-                "response": "There is nothing waiting for confirmation.",
-                "requires_confirmation": False,
-            }
+        return execute_tool_call(tool_name, arguments)
 
-        action = pending_action
-        pending_action = None
+    response = chat_with_ollama(
+        f"""
+You are ALFRED, a helpful AI assistant.
 
-        if action["tool"] == "move_files":
-            result = move_files(action["file_paths"], action["destination"])
-            return {
-                "response": result["message"],
-                "requires_confirmation": False,
-                "type": "file_action",
-                **result,
-            }
+Respond naturally and clearly. Keep answers useful but not overly long unless the user asks for detail.
 
-        if action["tool"] == "rename_file":
-            result = rename_file(action["path"], action["new_name"])
-            return {
-                "response": result["message"],
-                "requires_confirmation": False,
-                "type": "file_action",
-                **result,
-            }
-
-    if normalized in ["no", "cancel", "never mind", "stop"]:
-        pending_action = None
-        return {
-            "response": "Canceled.",
-            "requires_confirmation": False,
-        }
-
-    decision = _extract_json(_ollama(_tool_prompt(command)))
-    tool = decision.get("tool", "chat")
-    args = decision.get("args", {}) or {}
-
-    if tool == "chat":
-        message = args.get("message") or _ollama(command)
-        return {
-            "response": message,
-            "requires_confirmation": False,
-            "type": "chat",
-        }
-
-    if tool == "search_files":
-        query = args.get("query") or command
-        matches = search_files(query)
-
-        if not matches:
-            return {
-                "response": f"I couldn't find anything matching '{query}'.",
-                "requires_confirmation": False,
-                "type": "file_search",
-                "files": [],
-            }
-
-        return {
-            "response": f"I found {len(matches)} result(s) for '{query}'.",
-            "requires_confirmation": False,
-            "type": "file_search",
-            "files": matches,
-        }
-
-    if tool == "open_path":
-        path = args.get("path")
-        if not path:
-            return {
-                "response": "Which file or folder should I open?",
-                "requires_confirmation": False,
-            }
-
-        result = open_path(path)
-        return {
-            "response": result["message"],
-            "requires_confirmation": False,
-            "type": "file_action",
-            **result,
-        }
-
-    if tool == "create_folder":
-        folder_path = args.get("folder_path") or args.get("path")
-        if not folder_path:
-            return {
-                "response": "Where should I create the folder?",
-                "requires_confirmation": False,
-            }
-
-        result = create_folder(folder_path)
-        return {
-            "response": result["message"],
-            "requires_confirmation": False,
-            "type": "file_action",
-            **result,
-        }
-
-    if tool == "preview_screenshot_cleanup":
-        days = int(args.get("days") or 7)
-        preview = preview_screenshot_cleanup(days)
-
-        if preview["count"] == 0:
-            return {
-                "response": f"I didn't find any recent screenshots from the last {days} day(s).",
-                "requires_confirmation": False,
-                "type": "screenshot_cleanup",
-                **preview,
-            }
-
-        pending_action = {
-            "tool": "move_files",
-            "file_paths": preview["files"],
-            "destination": preview["destination"],
-        }
-
-        return {
-            "response": (
-                f"I found {preview['count']} screenshot(s). "
-                f"Move them to {preview['destination']}?"
-            ),
-            "requires_confirmation": True,
-            "type": "screenshot_cleanup",
-            **preview,
-        }
-
-    if tool == "move_files":
-        file_paths = args.get("file_paths") or []
-        destination = args.get("destination")
-
-        if not file_paths or not destination:
-            return {
-                "response": "I need the files and destination before I can move anything.",
-                "requires_confirmation": False,
-            }
-
-        pending_action = {
-            "tool": "move_files",
-            "file_paths": file_paths,
-            "destination": destination,
-        }
-
-        return {
-            "response": f"Move {len(file_paths)} file(s) to {destination}?",
-            "requires_confirmation": True,
-            "type": "file_action",
-        }
-
-    if tool == "rename_file":
-        path = args.get("path")
-        new_name = args.get("new_name")
-
-        if not path or not new_name:
-            return {
-                "response": "I need the file path and the new name.",
-                "requires_confirmation": False,
-            }
-
-        pending_action = {
-            "tool": "rename_file",
-            "path": path,
-            "new_name": new_name,
-        }
-
-        return {
-            "response": f"Rename this file to {new_name}?",
-            "requires_confirmation": True,
-            "type": "file_action",
-        }
-
-    if tool == "list_project_folder":
-        path = args.get("path") or None
-        result = list_project_folder(path)
-
-        return {
-            "response": result["message"],
-            "requires_confirmation": False,
-            "type": "project_list",
-            **result,
-        }
-
-    if tool == "open_project_path":
-        path = args.get("path")
-        if not path:
-            return {
-                "response": "Which project folder should I open?",
-                "requires_confirmation": False,
-            }
-
-        result = open_project_path(path)
-        return {
-            "response": result["message"],
-            "requires_confirmation": False,
-            "type": "project_action",
-            **result,
-        }
+User:
+{command}
+"""
+    )
 
     return {
-        "response": "I understood the request, but I don't know which ALFRED tool to use yet.",
+        "response": response,
         "requires_confirmation": False,
+        "type": "chat",
     }

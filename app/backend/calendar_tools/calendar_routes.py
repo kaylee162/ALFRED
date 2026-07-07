@@ -11,6 +11,7 @@ from .calendar_service import (
     list_events_for_day,
     create_calendar_event,
     update_calendar_event,
+    delete_calendar_event,
     create_reminder,
 )
 
@@ -98,7 +99,13 @@ def patch_event(event_id: str, payload: EventUpdateRequest):
 def put_event(event_id: str, payload: EventUpdateRequest):
     return patch_event(event_id, payload)
 
-
+@router.delete("/event/{event_id}")
+def remove_event(event_id: str):
+    try:
+        return delete_calendar_event(event_id)
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    
 @router.post("/reminder")
 def add_reminder(payload: ReminderCreateRequest):
     return create_reminder(

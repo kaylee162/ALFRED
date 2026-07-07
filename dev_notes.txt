@@ -1,19 +1,72 @@
-todos:
-clean up app.css
-clean up app.tsx
-connect ollama to all tools
-    calendar
-    project launcher
-    file manager
+todos / bugs:
+make ollama faster at processing
+generate a todo list needs better UI
+upcoming events needs better UI (especially delete button)
+adding a stop button when generating text
+for large text in the input box, expand downward instead of to the right. makes text easier to read
+summarize this week needs better UI
+schedule Dentist on August 17 at 7pm doesnt do the right time, probably a different timezone issue. 
+edit button doesnt disappear fast enough. when i put in a new command, edit button should disappear, not wait until the system outputs a new command
+similar thing - output should disappear once a new request gets sent, not once a new output is generated. 
+add better error handling, output should never be blank
+update calendar events has lots of bugs (only text given commands - update button works)
+hi alfred takes so long to load
+show my events for July 24 doesnt work, just blank.
+add some better handling for thinking / processing. moving 3 dots, text to walk through thinking process. 
+alfred still cant find projects. issue with project finder / file manager / project launcher. "No folders or files found."
+file manager needs some work. both with output and acutally finding files. find my resume doesnt work
+file manager can find some things, but need to improve UI. i.e. show downloads from the last 7 days
+folder navigation needs improving
+    also prob gonna need to fix the UI
+open my resume doesnt work. tries to open src folder, No folders or files found. i dont think alfred has access to downloads or Desktop
+add attachments. attach a file, and ask to explain this file. summarize this file or markdown. 
 
-    all future tools
+---
+
+improvements:
+improve the systems checks on the side of the screen
+voice dictation
+give alfred a voice
+add keyboard shortcut
+add voice activiation "hey siri" 
+adding memory
+
+integrate more tools
+    - gmail 
+    - google sheets
+    - google docs
+    - weather
+    - news
+    - all trails
+
+---
+
+becoming an assistant
+    better todos for the day
+    planning my week
+    top things this week
+    integrating tools together
+    giving more access to those tools to read and write (i.e. read this email, or reply to this email)
+
+
+---
+
+adding some quirks!!
+hey alfred - should always respond with "hey kaylee, what's poppin"
+instead of systems online... on the start screen, say something more like "Good [morning, afternoon, evening], Kaylee. [do systems check, backend working, systems online, etc], ready when you are."
+add more unique / technically cool systems checks that actually work. one for cpu? one to make sure all apis and connections are actually working (backend, frontend, etc.)
+adding more cool animations. like JARVIS
+
+when i add voice to alfred, he has to be british. 
 
 ----
+
 running the app:
 
 run backend
 cd app/backend
 .\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload
 
 run frontend
 cd app/frontend
