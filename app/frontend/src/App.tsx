@@ -5,10 +5,10 @@ import {
   ChevronDown,
   Cpu,
   FolderOpen,
+  Loader2,
   Radio,
   Send,
   ShieldCheck,
-  Sparkles,
   Terminal,
 } from "lucide-react";
 
@@ -85,6 +85,46 @@ type PendingCalendarEvent = {
     description?: string | null;
   };
 };
+
+type SystemCheckItem = {
+  label: string;
+  status: "online" | "offline" | "checking";
+  detail: string;
+};
+
+function getGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function getThinkingSteps(command: string) {
+  const lower = command.toLowerCase();
+
+  if (lower.includes("calendar") || lower.includes("event")) {
+    return [
+      "Reading your calendar request",
+      "Checking calendar tools",
+      "Preparing the response",
+    ];
+  }
+
+  if (lower.includes("project") || lower.includes("folder")) {
+    return [
+      "Finding the right project command",
+      "Checking local project access",
+      "Loading results",
+    ];
+  }
+
+  return [
+    "Reading your request",
+    "Choosing the right tool",
+    "Preparing the response",
+  ];
+}
 
 function toDateTimeLocalValue(value?: string | null) {
   if (!value) return "";
@@ -606,6 +646,31 @@ function ChatCalendarResponse({ response }: { response: string }) {
   );
 }
 
+function ProcessingPanel({ steps }: { steps: string[] }) {
+  return (
+    <div className="processing-panel">
+      <div className="processing-header">
+        <Loader2 size={18} />
+        <span>ALFRED is thinking</span>
+        <span className="processing-dots">
+          <i />
+          <i />
+          <i />
+        </span>
+      </div>
+
+      <div className="processing-steps">
+        {steps.map((step, index) => (
+          <div className="processing-step" key={step}>
+            <span>{index + 1}</span>
+            <small>{step}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ProjectExplorer({
   data,
   onFolderClick,
@@ -696,10 +761,9 @@ function normalizeProjectItems(items: any[]): ProjectItem[] {
 
 function App() {
   const [command, setCommand] = useState("");
-  const [response, setResponse] = useState("Systems online. Awaiting command.");
-  const [displayedResponse, setDisplayedResponse] = useState(
-    "Systems online. Awaiting command."
-  );
+  const startupMessage = `${getGreeting()}, Kaylee. Running systems check...`;
+  const [response, setResponse] = useState(startupMessage);
+  const [displayedResponse, setDisplayedResponse] = useState(startupMessage);
   const [isTypingResponse, setIsTypingResponse] = useState(false);
   const [shouldTypeResponse, setShouldTypeResponse] = useState(false);
   const [projectExplorer, setProjectExplorer] =
@@ -735,11 +799,36 @@ function App() {
   const [pendingEndTime, setPendingEndTime] = useState("");
   const [pendingStatus, setPendingStatus] = useState("");
   
+  const [showStartupChecks, setShowStartupChecks] = useState(true);
+  const [backendOnline, setBackendOnline] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
+  const [systemChecks, setSystemChecks] = useState<SystemCheckItem[]>([
+    {
+      label: "Backend",
+      status: "checking",
+      detail: "Checking local FastAPI service",
+    },
+    {
+      label: "Calendar API",
+      status: "checking",
+      detail: "Checking Google Calendar sync",
+    },
+    {
+      label: "Project tools",
+      status: "checking",
+      detail: "Waiting for backend confirmation",
+    },
+  ]);
+
   async function submitCommand() {
     const trimmedCommand = command.trim();
     if (!trimmedCommand) return;
+    setShowStartupChecks(false);
 
-    setResponse("Processing command...");
+    setIsProcessing(true);
+    setThinkingSteps(getThinkingSteps(trimmedCommand));
+    setResponse("");
     setShouldTypeResponse(false);
     setEventOptions(null);
 
@@ -807,7 +896,7 @@ function App() {
       } else {
         setProjectExplorer(null);
 
-        setShouldTypeResponse(data.type === "chat");
+        setShouldTypeResponse(true);
         setResponse(visibleResponse || data.response || "");
       }
 
@@ -815,7 +904,10 @@ function App() {
       await loadUpcomingEvents();
     } catch (error) {
       console.error(error);
+      setShouldTypeResponse(true);
       setResponse("Backend connection failed.");
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -864,6 +956,7 @@ function App() {
       setEditableEvent(createdEvent);
       setPendingEvent(null);
       setPendingStatus("");
+      setShouldTypeResponse(true);
       setResponse(`Created event: ${createdEvent.title}`);
 
       loadUpcomingEvents();
@@ -883,6 +976,7 @@ function App() {
 
     const data = await res.json();
     setProjectExplorer(data);
+    setShouldTypeResponse(true);
     setResponse(data.message || "Project folder loaded.");
   }
 
@@ -896,6 +990,7 @@ function App() {
     });
 
     const data = await res.json();
+    setShouldTypeResponse(true);
     setResponse(data.message || "Project opened.");
   }
 
@@ -953,6 +1048,7 @@ function App() {
       setEditableEvent(createdEvent);
       setIsEditingEvent(false);
       setEventStatus("Event created.");
+      setShouldTypeResponse(true);
       setResponse(
         `Created calendar event: ${createdEvent.title}\n` +
           `When: ${new Date(createdEvent.start).toLocaleString([], {
@@ -982,6 +1078,76 @@ function App() {
     } catch {
       setEventStatus("Could not create event.");
     }
+  }
+
+  async function runSystemCheck() {
+    const checks: SystemCheckItem[] = [];
+
+    let backendOk = false;
+
+    try {
+      const res = await fetch(`${API_BASE}/`);
+      backendOk = res.ok;
+
+      checks.push({
+        label: "Backend",
+        status: backendOk ? "online" : "offline",
+        detail: backendOk ? "FastAPI backend responded" : "Backend did not respond cleanly",
+      });
+    } catch {
+      checks.push({
+        label: "Backend",
+        status: "offline",
+        detail: "Could not reach FastAPI backend",
+      });
+    }
+
+    setBackendOnline(backendOk);
+
+    try {
+      const res = await fetch(`${API_BASE}/calendar/upcoming?days=7&max_results=5`);
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.detail || "Calendar unavailable");
+
+      setEvents(data.events || []);
+      setCalendarConnected(true);
+      setCalendarStatus("calendar synced");
+
+      checks.push({
+        label: "Calendar API",
+        status: "online",
+        detail: "Calendar connected and upcoming events loaded",
+      });
+    } catch {
+      setCalendarConnected(false);
+      setCalendarStatus("calendar offline");
+
+      checks.push({
+        label: "Calendar API",
+        status: "offline",
+        detail: "Calendar is not connected or needs re-auth",
+      });
+    }
+
+    checks.push({
+      label: "Project tools",
+      status: backendOk ? "online" : "offline",
+      detail: backendOk
+        ? "Project launcher ready through backend"
+        : "Project tools unavailable until backend is online",
+    });
+
+    setSystemChecks(checks);
+
+    const allOnline = checks.every((check) => check.status === "online");
+    const partiallyOnline = checks.some((check) => check.status === "online");
+
+    setShouldTypeResponse(true);
+    setResponse(
+      `${getGreeting()}, Kaylee.\n\n` +
+        `${allOnline || partiallyOnline ? "Ready when you are." : "Some systems are offline. Start the backend, then refresh ALFRED."}`
+    );
   }
 
   function openEventEditor(event: EditableCalendarEvent) {
@@ -1073,6 +1239,7 @@ function App() {
       setIsEditingEvent(false);
       setEditEventStatus("");
 
+      setShouldTypeResponse(true);
       setResponse(
         `Updated calendar event: ${updatedEvent.title}\n` +
           `When: ${new Date(updatedEvent.start).toLocaleString([], {
@@ -1107,12 +1274,14 @@ function App() {
     try {
       await deleteCalendarEvent(event.id);
 
+      setShouldTypeResponse(true);
       setResponse(`Deleted calendar event: ${event.title}`);
       setEditableEvent(null);
       setIsEditingEvent(false);
 
       await loadUpcomingEvents();
     } catch {
+      setShouldTypeResponse(true);
       setResponse("Could not delete event.");
     }
   }
@@ -1126,6 +1295,7 @@ function App() {
       setResponse(`Deleted event: ${event.title}`);
       await loadUpcomingEvents();
     } catch {
+      setShouldTypeResponse(true);
       setResponse("Could not delete event.");
     }
   }
@@ -1133,6 +1303,7 @@ function App() {
   function handleOptionUpdate(event: CalendarEvent) {
     const editable = normalizeEditableEvent(event);
     if (!editable) {
+      setShouldTypeResponse(true);
       setResponse("Could not open that event for editing.");
       return;
     }
@@ -1142,7 +1313,7 @@ function App() {
   }
 
   useEffect(() => {
-    loadUpcomingEvents();
+    runSystemCheck();
   }, []);
 
   useEffect(() => {
@@ -1236,19 +1407,10 @@ function App() {
         </aside>
 
         <section className="center-console">
-          <div className="orbit-system">
-            <div className="orbit orbit-one" />
-            <div className="orbit orbit-two" />
-            <div className="orbit orbit-three" />
-            <div className="core">
-              <Sparkles size={42} />
-            </div>
-          </div>
-
-          <div className="title-group">
+           <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.5
+              Adaptive Learning Framework for Responsive Executive Decisions V.6
             </p>
           </div>
 
@@ -1259,12 +1421,17 @@ function App() {
             </div>
 
             <div className="command-input-row">
-              <input
+              <textarea
+                className="command-textarea"
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") submitCommand();
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submitCommand();
+                  }
                 }}
+                rows={1}
                 placeholder='Try: "show me my projects"'
               />
               <button onClick={submitCommand} aria-label="Send command">
@@ -1275,7 +1442,22 @@ function App() {
 
           <div className="response-console">
             <p className="panel-label">system response</p>
-            {projectExplorer ? (
+            {showStartupChecks && !isProcessing && !projectExplorer && (
+              <div className="system-check-grid">
+                {systemChecks.map((check) => (
+                  <div
+                    className={`system-check-card ${check.status}`}
+                    key={check.label}
+                  >
+                    <span>{check.label}</span>
+                    <small>{check.detail}</small>
+                  </div>
+                ))}
+              </div>
+            )}
+            {isProcessing ? (
+                <ProcessingPanel steps={thinkingSteps} />
+              ) : projectExplorer ? (
               <ProjectExplorer
                 data={projectExplorer}
                 onFolderClick={loadProjectFolder}
@@ -1391,6 +1573,7 @@ function App() {
                         onClick={() => {
                           setPendingEvent(null);
                           setPendingStatus("");
+                          setShouldTypeResponse(true);
                           setResponse("Event creation cancelled.");
                         }}
                       >
@@ -1562,9 +1745,11 @@ function App() {
                       }}
                     >
                       <div className="event-time-badge">
-                        {new Date(event.start).toLocaleDateString([], {
-                          weekday: "short",
-                        })}
+                        <span>
+                          {new Date(event.start).toLocaleDateString([], {
+                            weekday: "short",
+                          })}
+                        </span>
                         <strong>
                           {new Date(event.start).toLocaleTimeString([], {
                             hour: "numeric",

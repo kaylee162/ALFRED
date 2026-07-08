@@ -367,8 +367,101 @@ def _classify_command(command: str) -> dict:
             "mode": "chat",
         }
 
+def _special_response(command: str) -> str | None:
+    normalized = command.strip().lower()
+
+    responses = {
+        "hey alfred":
+            "hey kaylee, what's poppin?",
+
+        "good morning alfred":
+            "good morning, kaylee. Early bird gets the worm right :P systems are online and i'm ready whenever you are.",
+
+        "good night alfred":
+            "good night, kaylee. don't stay up too late scrolling reels",
+
+        "thanks alfred":
+            "fo sizzle :)",
+
+        "thank you alfred":
+            "no problemo kaylee",
+
+        "who are you":
+            "i'm ALFRED, your local AI assistant. i can manage your projects, calendar, emails, files, weather, and help solve problems or answer questions",
+
+        "who are you alfred":
+            "i'm ALFRED, your personal AI assistant. built to keep your projects organized, automate repetitive work, and make your day a little easier :)",
+
+        "how are you alfred":
+            "everythings running smoothly, so never better",
+
+        "status report":
+            "backend online. calendar synchronized. project tools ready. all systems a go",
+
+        "are you awake":
+            "always :/",
+
+        "you there":
+            "yup, where else would i be",
+
+        "you there?":
+            "when am i not",
+
+        "what's up":
+            "the ceiling duh",
+
+        "whats up":
+            "the ceiling duh",
+
+        "good job alfred":
+            "thanks means a lot kaylee :)",
+
+        "nice work":
+            "i'll take that as a successful execution.",
+
+        "im back":
+            "barely missed you",
+
+        "miss me":
+            "no i appreciated the silence",
+
+        "coffee":
+            "nope, you drink enough caffeine for the both of us",
+
+        "coffee?":
+            "nope, you drink enough caffeine for the both of us",
+
+        "tell me a joke":
+            "there are only 10 kinds of people. those who understand binary, and those who don't.",
+
+        "goodbye alfred":
+            "see you later alligator",
+
+        "bye alfred":
+            "see you later alligator",
+
+        "see you later alfred":
+            "see you later alligator",
+
+        "good afternoon alfred":
+            "good afternoon, kaylee. Ready to get some work done?",
+
+        "good evening alfred":
+            "good evening, kaylee. Everything is online and ready whenever you are."
+    }
+
+    return responses.get(normalized)
 
 def handle_ai_command(command: str) -> dict:
+    special = _special_response(command)
+
+    if special:
+        return {
+            "response": special,
+            "requires_confirmation": False,
+            "type": "chat",
+        }
+    
     command = _normalize_command(command)
 
     decision = _classify_command(command)
