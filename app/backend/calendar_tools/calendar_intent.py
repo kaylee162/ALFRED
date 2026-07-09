@@ -850,21 +850,6 @@ def handle_calendar_command(command: str) -> str | None:
     if "tomorrow" in text or "tommorow" in text or "tmrw" in text or "tmr" in text:
         target = today + timedelta(days=1)
 
-        if "plan" in text:
-            plan = generate_daily_plan(target.isoformat())
-            recs = "\n".join(f"• {item}" for item in plan["recommendations"])
-
-            blocks = "\n".join(
-                f"• {block['start']} - {block['end']}"
-                for block in plan["free_focus_blocks"]
-            ) or "No clean focus blocks found."
-
-            return (
-                "Tomorrow's Plan\n\n"
-                f"Recommendations\n{recs}\n\n"
-                f"Open Focus Blocks\n{blocks}"
-            )
-
         events = list_events_for_day(target.isoformat())
         return _format_events("tomorrow", events)
 
@@ -892,37 +877,47 @@ def handle_calendar_command(command: str) -> str | None:
 
     if "week" in text:
         start = _start_of_week(today)
-        summary = generate_weekly_summary(start.isoformat())
-
         week_blocks = []
+        day_summaries = []
 
-        for day in summary["days"]:
-            event_count = day["event_count"]
+        counts = []
+
+        for i in range(7):
+            day = start + timedelta(days=i)
+            events = list_events_for_day(day.isoformat())
+            count = len(events)
+            counts.append((day, count))
+
             week_blocks.append(
-                f"• {day['date']} — {event_count} event{'s' if event_count != 1 else ''}"
+                f"• {day.isoformat()} — {count} event{'s' if count != 1 else ''}"
             )
 
-            if event_count == 0:
+            if count == 0:
                 week_blocks.append("  - No events")
             else:
-                for event in day["events"]:
+                for event in events:
                     week_blocks.append(f"  - {_format_event(event).replace('• ', '')}")
 
-        week_lines = "\n".join(week_blocks)
+        busiest_day, busiest_count = max(counts, key=lambda item: item[1])
+        lightest_day, lightest_count = min(counts, key=lambda item: item[1])
 
-        filtered_summary = [
-            item for item in summary["summary"]
-            if not item.startswith("Use lighter days")
+        day_summaries = [
+            f"Busiest day: {busiest_day.isoformat()} with {busiest_count} events.",
+            f"Lightest day: {lightest_day.isoformat()} with {lightest_count} events.",
         ]
 
-        summary_lines = "\n".join(f"• {item}" for item in filtered_summary)
+        top_blurb = (
+            "Absolutely, here's what your week looks like. "
+            + " ".join(day_summaries)
+        )
 
         return (
+            f"{top_blurb}\n\n"
             "Weekly Calendar Overview\n\n"
             "This Week\n"
-            f"{week_lines}\n\n"
+            f"{chr(10).join(week_blocks)}\n\n"
             "Summary\n"
-            f"{summary_lines}"
+            f"{chr(10).join(f'• {item}' for item in day_summaries)}"
         )
 
     if "month" in text:

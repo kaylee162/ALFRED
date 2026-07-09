@@ -881,6 +881,11 @@ h1 {
   letter-spacing: 0.12em;
 }
 
+.calendar-quick-text {
+  margin-bottom: 1rem;
+  line-height: 1.6;
+}
+
 /* ================================
    11. Event Edit + Event Options
 ================================ */

@@ -1,13 +1,12 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import re
 
 from ai.ollama_client import chat_with_ollama
 from ai.tool_executor import execute_tool_call
 from ai.alfred_tools import ALFRED_TOOLS
 
 TIMEZONE = "America/New_York"
-
-import re
 
 
 def _normalize_command(command: str) -> str:
@@ -474,13 +473,13 @@ def handle_ai_command(command: str) -> dict:
 
     response = chat_with_ollama(
         f"""
-You are ALFRED, a helpful AI assistant.
+    You are ALFRED, a helpful AI assistant.
 
-Respond naturally and clearly. Keep answers useful but not overly long unless the user asks for detail.
+    Start with one quick helpful summary sentence, then give the answer. Keep answers useful but not overly long unless the user asks for detail.
 
-User:
-{command}
-"""
+    User:
+    {command}
+    """
     )
 
     return {

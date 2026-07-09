@@ -17,6 +17,40 @@ TOKEN_PATH = BASE_DIR / "token.json"
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
+TIMEZONE = "America/New_York"
+LOCAL_TZ = ZoneInfo(TIMEZONE)
+
+
+def _local_now() -> datetime:
+    return datetime.now(LOCAL_TZ)
+
+
+def _as_local_datetime(value: str) -> datetime:
+    parsed = parser.parse(value)
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=LOCAL_TZ)
+
+    return parsed.astimezone(LOCAL_TZ)
+
+
+def _format_google_event(event: dict[str, Any]) -> dict[str, Any]:
+    start_data = event.get("start", {})
+    end_data = event.get("end", {})
+
+    is_all_day = "date" in start_data
+
+    return {
+        "id": event.get("id"),
+        "title": event.get("summary", "Untitled"),
+        "start": start_data.get("dateTime") or start_data.get("date"),
+        "end": end_data.get("dateTime") or end_data.get("date"),
+        "all_day": is_all_day,
+        "location": event.get("location"),
+        "description": event.get("description"),
+        "htmlLink": event.get("htmlLink"),
+    }
+
 
 def get_calendar_service():
     creds = None
@@ -47,15 +81,16 @@ def get_calendar_service():
 def list_upcoming_events(days: int = 7, max_results: int = 20) -> list[dict[str, Any]]:
     service = get_calendar_service()
 
-    now = datetime.utcnow()
+    now = _local_now()
     end = now + timedelta(days=days)
 
     events_result = (
         service.events()
         .list(
             calendarId="primary",
-            timeMin=now.isoformat() + "Z",
-            timeMax=end.isoformat() + "Z",
+            timeMin=now.isoformat(),
+            timeMax=end.isoformat(),
+            timeZone=TIMEZONE,
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime",
@@ -63,30 +98,14 @@ def list_upcoming_events(days: int = 7, max_results: int = 20) -> list[dict[str,
         .execute()
     )
 
-    events = events_result.get("items", [])
-
-    return [
-        {
-            "id": event.get("id"),
-            "title": event.get("summary", "Untitled"),
-            "start": event.get("start", {}).get("dateTime")
-            or event.get("start", {}).get("date"),
-            "end": event.get("end", {}).get("dateTime")
-            or event.get("end", {}).get("date"),
-            "location": event.get("location"),
-            "description": event.get("description"),
-        }
-        for event in events
-    ]
+    return [_format_google_event(event) for event in events_result.get("items", [])]
 
 
 def list_events_for_day(date_string: str) -> list[dict[str, Any]]:
     service = get_calendar_service()
 
-    local_tz = ZoneInfo("America/New_York")
     day = parser.parse(date_string).date()
-
-    start = datetime.combine(day, datetime.min.time(), tzinfo=local_tz)
+    start = datetime.combine(day, datetime.min.time(), tzinfo=LOCAL_TZ)
     end = start + timedelta(days=1)
 
     events_result = (
@@ -95,25 +114,15 @@ def list_events_for_day(date_string: str) -> list[dict[str, Any]]:
             calendarId="primary",
             timeMin=start.isoformat(),
             timeMax=end.isoformat(),
+            timeZone=TIMEZONE,
             singleEvents=True,
             orderBy="startTime",
         )
         .execute()
     )
 
-    return [
-        {
-            "id": event.get("id"),
-            "title": event.get("summary", "Untitled"),
-            "start": event.get("start", {}).get("dateTime")
-            or event.get("start", {}).get("date"),
-            "end": event.get("end", {}).get("dateTime")
-            or event.get("end", {}).get("date"),
-            "location": event.get("location"),
-            "description": event.get("description"),
-        }
-        for event in events_result.get("items", [])
-    ]
+    return [_format_google_event(event) for event in events_result.get("items", [])]
+
 
 def create_calendar_event(
     title: str,
@@ -125,17 +134,20 @@ def create_calendar_event(
 ) -> dict[str, Any]:
     service = get_calendar_service()
 
+    start_dt = _as_local_datetime(start_time)
+    end_dt = _as_local_datetime(end_time)
+
     event_body = {
         "summary": title,
         "location": location,
         "description": description,
         "start": {
-            "dateTime": start_time,
-            "timeZone": "America/New_York",
+            "dateTime": start_dt.isoformat(),
+            "timeZone": TIMEZONE,
         },
         "end": {
-            "dateTime": end_time,
-            "timeZone": "America/New_York",
+            "dateTime": end_dt.isoformat(),
+            "timeZone": TIMEZONE,
         },
         "reminders": {
             "useDefault": False,
@@ -154,13 +166,8 @@ def create_calendar_event(
         .execute()
     )
 
-    return {
-        "id": created_event.get("id"),
-        "title": created_event.get("summary"),
-        "start": created_event.get("start"),
-        "end": created_event.get("end"),
-        "htmlLink": created_event.get("htmlLink"),
-    }
+    return _format_google_event(created_event)
+
 
 def update_calendar_event(
     event_id: str,
@@ -172,6 +179,9 @@ def update_calendar_event(
 ) -> dict[str, Any]:
     service = get_calendar_service()
 
+    start_dt = _as_local_datetime(start_time)
+    end_dt = _as_local_datetime(end_time)
+
     updated_event = (
         service.events()
         .patch(
@@ -182,29 +192,20 @@ def update_calendar_event(
                 "location": location,
                 "description": description,
                 "start": {
-                    "dateTime": start_time,
-                    "timeZone": "America/New_York",
+                    "dateTime": start_dt.isoformat(),
+                    "timeZone": TIMEZONE,
                 },
                 "end": {
-                    "dateTime": end_time,
-                    "timeZone": "America/New_York",
+                    "dateTime": end_dt.isoformat(),
+                    "timeZone": TIMEZONE,
                 },
             },
         )
         .execute()
     )
 
-    return {
-        "id": updated_event.get("id"),
-        "title": updated_event.get("summary", "Untitled"),
-        "start": updated_event.get("start", {}).get("dateTime")
-        or updated_event.get("start", {}).get("date"),
-        "end": updated_event.get("end", {}).get("dateTime")
-        or updated_event.get("end", {}).get("date"),
-        "location": updated_event.get("location"),
-        "description": updated_event.get("description"),
-        "htmlLink": updated_event.get("htmlLink"),
-    }
+    return _format_google_event(updated_event)
+
 
 def delete_calendar_event(event_id: str) -> dict[str, Any]:
     service = get_calendar_service()
@@ -219,12 +220,13 @@ def delete_calendar_event(event_id: str) -> dict[str, Any]:
         "deleted_event_id": event_id,
     }
 
+
 def create_reminder(
     title: str,
     reminder_time: str,
     reminder_minutes_before: int = 0,
 ) -> dict[str, Any]:
-    start = parser.parse(reminder_time)
+    start = _as_local_datetime(reminder_time)
     end = start + timedelta(minutes=15)
 
     return create_calendar_event(

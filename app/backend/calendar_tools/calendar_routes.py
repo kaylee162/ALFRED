@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from fastapi import APIRouter, HTTPException
@@ -14,9 +13,6 @@ from .calendar_service import (
     delete_calendar_event,
     create_reminder,
 )
-
-from .planning_service import generate_daily_plan, generate_weekly_summary
-
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
@@ -113,19 +109,3 @@ def add_reminder(payload: ReminderCreateRequest):
         reminder_time=payload.reminder_time,
         reminder_minutes_before=payload.reminder_minutes_before,
     )
-
-
-@router.get("/plan/tomorrow")
-def plan_tomorrow():
-    tomorrow = datetime.now().date() + timedelta(days=1)
-    return generate_daily_plan(tomorrow.isoformat())
-
-
-@router.get("/plan/day")
-def plan_day(date: str):
-    return generate_daily_plan(date)
-
-
-@router.get("/plan/week")
-def plan_week(start_date: str):
-    return generate_weekly_summary(start_date)
