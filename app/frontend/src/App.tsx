@@ -953,6 +953,9 @@ function App() {
     setCalendarCardResponse("");
     setEventOptions(null);
 
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 35000);
+
     try {
       const res = await fetch(`${API_BASE}/command`, {
         method: "POST",
@@ -960,12 +963,21 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ command: trimmedCommand }),
+        signal: controller.signal,
       });
 
-      const data = await res.json();
+      window.clearTimeout(timeoutId);
+
+      let data: any;
+
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error("The backend returned something ALFRED could not read.");
+      }
 
       if (!res.ok) {
-        throw new Error(data.detail || "Command failed");
+        throw new Error(data.detail || data.response || "Command failed.");
       }
 
       const responseText = data.response || "";
@@ -1034,10 +1046,29 @@ function App() {
 
       setCommand("");
       await loadUpcomingEvents();
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      window.clearTimeout(timeoutId);
+
+      let message = "Something went wrong, but ALFRED is still running.";
+
+      if (error?.name === "AbortError") {
+        message = "That request took too long, so I stopped waiting. Try again with a shorter request.";
+      } else if (error?.message?.includes("Failed to fetch")) {
+        message = "I couldn’t reach the backend. Make sure the FastAPI server is running.";
+      } else if (error?.message) {
+        message = error.message;
+      }
+
+      setProjectExplorer(null);
+      setCalendarCardResponse("");
+      setEventOptions(null);
+      setPendingEvent(null);
+      setEditableEvent(null);
+      setIsEditingEvent(false);
+
       setShouldTypeResponse(true);
-      setResponse("Backend connection failed.");
+      setResponse(message);
     } finally {
       setIsProcessing(false);
     }
@@ -1634,7 +1665,7 @@ function App() {
                     </>
                   ) : (
                     <ChatCalendarResponse
-                      response={shouldTypeResponse ? displayedResponse : response}
+                      response={(shouldTypeResponse ? displayedResponse : response) || "Ready when you are."}
                     />
                   )}
                 </div>

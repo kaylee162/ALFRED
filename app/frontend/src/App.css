@@ -495,7 +495,26 @@ h1 {
 }
 
 /* ================================
-   8. Clock Panel
+   8. Error Handling
+================================ */
+
+.error-response {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 120, 120, 0.12);
+  border: 1px solid rgba(255, 120, 120, 0.35);
+  color: #3b1f1f;
+  line-height: 1.5;
+}
+
+.empty-response {
+  opacity: 0.65;
+  font-size: 0.95rem;
+  padding: 12px 0;
+}
+
+/* ================================
+   9. Clock Panel
 ================================ */
 .clock-panel {
   position: relative;
@@ -530,7 +549,7 @@ h1 {
 }
 
 /* ================================
-   9. Upcoming Events Panel
+   10. Upcoming Events Panel
 ================================ */
 .events-panel,
 .chat-calendar-card,
@@ -736,7 +755,7 @@ h1 {
 }
 
 /* ================================
-   10. Calendar Chat Responses
+   11. Calendar Chat Responses
 ================================ */
 .chat-calendar-card,
 .chat-weather-card {
@@ -887,7 +906,7 @@ h1 {
 }
 
 /* ================================
-   11. Event Edit + Event Options
+   12. Event Edit + Event Options
 ================================ */
 .event-edit-button,
 .event-save-button,
@@ -1057,7 +1076,7 @@ h1 {
 }
 
 /* ================================
-   12. Project Explorer
+   13. Project Explorer
 ================================ */
 .project-explorer-card {
   position: relative;
@@ -1146,7 +1165,7 @@ h1 {
 }
 
 /* ================================
-   13. Weather Response Cards
+   14. Weather Response Cards
 ================================ */
 .chat-weather-header {
   justify-content: center;
@@ -1216,7 +1235,7 @@ h1 {
 }
 
 /* ================================
-   14. Tomorrow Plan Panel
+   15. Tomorrow Plan Panel
 ================================ */
 .plan-console {
   display: grid;
@@ -1245,7 +1264,7 @@ h1 {
 }
 
 /* ================================
-   15. Animations
+   16. Animations
 ================================ */
 @keyframes scan {
   from { transform: translateY(-180px); }
@@ -1295,7 +1314,7 @@ h1 {
 }
 
 /* ================================
-   16. Responsive Layout
+   17. Responsive Layout
 ================================ */
 @media (max-width: 1120px) {
   .hud {

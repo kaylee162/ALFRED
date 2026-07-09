@@ -16,10 +16,20 @@ def chat_with_ollama(prompt: str) -> str:
         "stream": False,
     }
 
-    response = requests.post(OLLAMA_URL, json=payload, timeout=60)
+    try:
+        response = requests.post(OLLAMA_URL, json=payload, timeout=30)
+    except requests.exceptions.Timeout:
+        raise TimeoutError("Ollama request timed out")
+    except requests.exceptions.ConnectionError:
+        raise ConnectionError("Could not connect to Ollama. Make sure Ollama is running.")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Ollama request failed: {e}")
 
     if not response.ok:
-        raise Exception(f"Ollama error {response.status_code}: {response.text}")
+        raise RuntimeError(f"Ollama error {response.status_code}: {response.text}")
 
-    data = response.json()
-    return data["message"]["content"]
+    try:
+        data = response.json()
+        return data["message"]["content"]
+    except Exception:
+        raise RuntimeError("Ollama returned an invalid response.")

@@ -460,30 +460,94 @@ def handle_ai_command(command: str) -> dict:
             "requires_confirmation": False,
             "type": "chat",
         }
-    
+
     command = _normalize_command(command)
 
-    decision = _classify_command(command)
+    try:
+        decision = _classify_command(command)
+    except TimeoutError:
+        return {
+            "response": "That took too long to process. Try asking again with a different command.",
+            "requires_confirmation": False,
+            "type": "error",
+        }
+    except ConnectionError:
+        return {
+            "response": "I couldn’t connect to Ollama. Make sure Ollama is running, then try again.",
+            "requires_confirmation": False,
+            "type": "error",
+        }
+    except Exception as e:
+        print("Command classification failed:", e)
+        decision = {"mode": "chat"}
 
     if decision.get("mode") == "tool":
         tool_name = decision.get("tool")
         arguments = decision.get("arguments", {})
 
-        return execute_tool_call(tool_name, arguments)
+        if not tool_name:
+            return {
+                "response": "I understood this needs a tool, but I couldn’t figure out which one. Try rewording it.",
+                "requires_confirmation": False,
+                "type": "error",
+            }
 
-    response = chat_with_ollama(
-        f"""
-    You are ALFRED, a helpful AI assistant.
+        try:
+            result = execute_tool_call(tool_name, arguments)
 
-    Start with one quick helpful summary sentence, then give the answer. Keep answers useful but not overly long unless the user asks for detail.
+            if not result:
+                return {
+                    "response": f"I tried to run the {tool_name} tool, but it did not return anything.",
+                    "requires_confirmation": False,
+                    "type": "error",
+                }
 
-    User:
-    {command}
-    """
-    )
+            return result
 
-    return {
-        "response": response,
-        "requires_confirmation": False,
-        "type": "chat",
-    }
+        except Exception as e:
+            print(f"Tool failed: {tool_name}", e)
+
+            return {
+                "response": f"I understood the request, but the {tool_name} tool failed. Try again or check that the service is connected.",
+                "requires_confirmation": False,
+                "type": "error",
+            }
+
+    try:
+        response = chat_with_ollama(
+            f"""
+You are ALFRED, a helpful AI assistant.
+
+Start with one quick helpful summary sentence, then give the answer. Keep answers useful but not overly long unless the user asks for detail.
+
+User:
+{command}
+"""
+        )
+
+        return {
+            "response": response,
+            "requires_confirmation": False,
+            "type": "chat",
+        }
+
+    except TimeoutError:
+        return {
+            "response": "That took too long to answer. Try asking again with a shorter prompt.",
+            "requires_confirmation": False,
+            "type": "error",
+        }
+    except ConnectionError:
+        return {
+            "response": "I couldn’t connect to Ollama. Make sure Ollama is running, then try again.",
+            "requires_confirmation": False,
+            "type": "error",
+        }
+    except Exception as e:
+        print("Chat response failed:", e)
+
+        return {
+            "response": "I had trouble generating that response, but ALFRED is still running.",
+            "requires_confirmation": False,
+            "type": "error",
+        }

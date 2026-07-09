@@ -1,3 +1,4 @@
+import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -112,6 +113,28 @@ def handle_command(request: CommandRequest):
         return {
             "response": "Tell me what you want me to do.",
             "requires_confirmation": False,
+            "type": "error",
         }
 
-    return handle_ai_command(command)
+    try:
+        result = handle_ai_command(command)
+
+        if not result:
+            return {
+                "response": "I tried to handle that, but nothing came back. Try rewording it.",
+                "requires_confirmation": False,
+                "type": "error",
+            }
+
+        return result
+
+    except Exception as e:
+        print("Command failed:")
+        traceback.print_exc()
+
+        return {
+            "response": "Something went wrong while handling that request, but I’m still here. Try again or reword the command.",
+            "requires_confirmation": False,
+            "type": "error",
+            "error": str(e),
+        }

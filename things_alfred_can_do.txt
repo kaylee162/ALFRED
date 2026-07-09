@@ -19,8 +19,6 @@ show me my calendar today
 what’s on my calendar tomorrow
 show upcoming events
 show my events for July 17
-plan my day for tomorrow
-plan my week
 summarize this week
 create an event called Meeting tomorrow at 3pm
 schedule Dentist on August 17 at 7pm
@@ -93,6 +91,24 @@ what is the high temp today
 what's the humidity today
 what's the chance of rain tomorrow
 what's the weather in New York tomorrow
+
+Updated Error handling
+
+Bad requests and how they are handled:
+Empty input - "Tell me what you need me to do."
+Ollama is not running - "I couldn't connect to Ollama. Make sure Ollama is running, then try again."
+Backend is off - "I couldn't reach the backend."
+Backend returns a bad JSON - "The backend returned something ALFRED could not read."
+Tool name is missing - "I understand this needs a tool, but I couldn't figure out which one."
+Calendar API fails - "I understood the request, but the calendar tool failed."
+Project folder path is invalid- Tool should return a friendly message instead of crashing
+Weather API fails - Tool should return something like "I couldn’t get the weather right now."
+“delete the event” with no matching events - Calendar tool should say no matching event was found
+“update my meeting” with multiple matches - Calendar tool should show options instead of guessing
+“create an event tomorrow” with no title - Should show missing title form
+“open project fake-folder-name” - Should say project not found or show project explorer
+Random unclear request like “do the thing” - Falls back to chat or asks for clarification
+Invalid local file action - Should say it cannot access or find that file 
 
 ---
 
