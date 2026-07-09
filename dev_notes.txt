@@ -16,6 +16,7 @@ better error handling for timeouts
 typing thing for immediate responses
 
 specific:
+weekly weather pulls a weird order. it should always have today at the first block, then the next 6 days after. 
 schedule Dentist on August 17 at 7pm doesnt do the right time, probably a different timezone issue. 
 update calendar events has lots of bugs (only text given commands - update button works)
 show my events for July 24 doesnt work, just blank. too far in advance. 

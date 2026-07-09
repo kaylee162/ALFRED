@@ -42,6 +42,7 @@ type CalendarEvent = {
   title: string;
   start: string;
   end?: string;
+  all_day?: boolean;
   location?: string | null;
   description?: string | null;
 };
@@ -50,18 +51,6 @@ type EventOptionsPayload = {
   action: "update" | "delete";
   events: CalendarEvent[];
 };
-
-type TomorrowPlan = {
-  date: string;
-  events: CalendarEvent[];
-  free_focus_blocks: {
-    start: string;
-    end: string;
-  }[];
-  recommendations: string[];
-  suggested_plan: string[];
-};
-
 
 type EditableCalendarEvent = {
   id: string;
@@ -211,6 +200,126 @@ function getVisibleResponse(response: string) {
     .trim();
 }
 
+function isDateOnly(value?: string | null) {
+  return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function parseLocalCalendarDate(value?: string | null) {
+  if (!value) return null;
+
+  if (isDateOnly(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Date(year, month - 1, day, 12, 0, 0);
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatUpcomingWeekday(event: CalendarEvent) {
+  const date = parseLocalCalendarDate(event.start);
+  if (!date) return "";
+
+  return date.toLocaleDateString([], { weekday: "short" });
+}
+
+function formatUpcomingTime(event: CalendarEvent) {
+  if (event.all_day || isDateOnly(event.start)) return "All day";
+
+  const date = parseLocalCalendarDate(event.start);
+  if (!date) return "";
+
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatUpcomingDate(event: CalendarEvent) {
+  const date = parseLocalCalendarDate(event.start);
+  if (!date) return "";
+
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function toLocalApiDateTime(value: string) {
+  return value;
+}
+
+function splitWeeklyCalendarResponse(response: string) {
+  const weeklyStartIndex = response.indexOf("Weekly Calendar Overview");
+
+  if (weeklyStartIndex === -1) {
+    return {
+      quickSummary: "",
+      calendarResponse: response,
+    };
+  }
+
+  return {
+    quickSummary: response.slice(0, weeklyStartIndex).trim(),
+    calendarResponse: response.slice(weeklyStartIndex).trim(),
+  };
+}
+
+function getCalendarLabelFromTitle(title: string) {
+  return title
+    .replace(/^Here’s your calendar for\s+/i, "")
+    .replace(/^No events\s+/i, "")
+    .replace(/^You have nothing on your calendar\s*/i, "")
+    .replace(/[.:]+$/g, "")
+    .trim();
+}
+
+function buildDailyCalendarQuickSummary(calendarResponse: string) {
+  const parsed = parseCalendarResponse(calendarResponse);
+
+  if (!parsed || parsed.type !== "daily") return "";
+
+  const dayLabel = getCalendarLabelFromTitle(parsed.title) || "that day";
+
+  if (parsed.events.length === 0) {
+    return `Absolutely, here’s your calendar ${dayLabel}. Looks clear, you have no events ${dayLabel}.`;
+  }
+
+  const eventTitles = parsed.events.map((event) => event.title).join(", ");
+
+  return `Absolutely, here’s your calendar ${dayLabel}. Looks like you have ${parsed.events.length} ${
+    parsed.events.length === 1 ? "event" : "events"
+  }: ${eventTitles}.`;
+}
+
+function splitCalendarResponse(response: string) {
+  const parsed = parseCalendarResponse(response);
+
+  if (response.includes("Weekly Calendar Overview")) {
+    const { quickSummary, calendarResponse } =
+      splitWeeklyCalendarResponse(response);
+
+    return {
+      quickSummary:
+        quickSummary ||
+        "Absolutely, here’s your calendar for the week. I pulled everything into a weekly overview for you.",
+      calendarResponse,
+    };
+  }
+
+  if (parsed?.type === "daily") {
+    return {
+      quickSummary: buildDailyCalendarQuickSummary(response),
+      calendarResponse: response,
+    };
+  }
+
+  return {
+    quickSummary: "",
+    calendarResponse: "",
+  };
+}
+
 const API_BASE = "http://localhost:8000";
 
 function ClockPanel() {
@@ -252,13 +361,16 @@ function parseCalendarResponse(response: string) {
     response.startsWith("No events") ||
     response.startsWith("You have nothing on your calendar");
 
-  const isWeeklyCalendar = response.startsWith("Weekly Calendar Overview");
+  const isWeeklyCalendar = response.includes("Weekly Calendar Overview");
 
   if (!isDailyCalendar && !isWeeklyCalendar) return null;
 
   if (isWeeklyCalendar) {
-    const lines = response.split("\n");
-
+    const weeklyStartIndex = response.indexOf("Weekly Calendar Overview");
+    const quickSummary = response.slice(0, weeklyStartIndex).trim();
+    const weeklyResponse = response.slice(weeklyStartIndex);
+    const lines = weeklyResponse.split("\n");
+    
     const weekItems: {
       date: string;
       dateShort: string;
@@ -333,6 +445,7 @@ function parseCalendarResponse(response: string) {
     return {
       type: "weekly" as const,
       title: "Weekly Calendar Overview",
+      quickSummary,
       events: [],
       weekItems,
       summaryItems,
@@ -549,6 +662,12 @@ function ChatCalendarResponse({ response }: { response: string }) {
   if (parsed.type === "weekly") {
     return (
       <div className="chat-calendar-card">
+        {parsed.quickSummary && (
+          <div className="chat-week-summary">
+            <span>Quick Summary</span>
+            <small>{parsed.quickSummary}</small>
+          </div>
+        )}
         <div className="chat-calendar-header centered">
           <div>
             <p className="panel-label">calendar response</p>
@@ -769,10 +888,10 @@ function App() {
   const [projectExplorer, setProjectExplorer] =
     useState<ProjectExplorerData | null>(null);
 
+  const [calendarCardResponse, setCalendarCardResponse] = useState("");
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarStatus, setCalendarStatus] = useState("calendar not checked");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [tomorrowPlan] = useState<TomorrowPlan | null>(null);
 
   const [eventTitle, setEventTitle] = useState("");
   const [eventDateTime, setEventDateTime] = useState("");
@@ -829,7 +948,9 @@ function App() {
     setIsProcessing(true);
     setThinkingSteps(getThinkingSteps(trimmedCommand));
     setResponse("");
+    setDisplayedResponse("");
     setShouldTypeResponse(false);
+    setCalendarCardResponse("");
     setEventOptions(null);
 
     try {
@@ -896,8 +1017,19 @@ function App() {
       } else {
         setProjectExplorer(null);
 
-        setShouldTypeResponse(true);
-        setResponse(visibleResponse || data.response || "");
+        const finalResponse = visibleResponse || data.response || "";
+
+        const splitCalendar = splitCalendarResponse(finalResponse);
+
+        if (splitCalendar.calendarResponse) {
+          setCalendarCardResponse(splitCalendar.calendarResponse);
+          setShouldTypeResponse(true);
+          setResponse(splitCalendar.quickSummary);
+        } else {
+          setCalendarCardResponse("");
+          setShouldTypeResponse(true);
+          setResponse(finalResponse);
+        }
       }
 
       setCommand("");
@@ -939,8 +1071,8 @@ function App() {
     try {
       const created = await createCalendarEvent({
         title,
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
+        start_time: `${date}T${startTime}`,
+        end_time: endTime ? `${date}T${endTime}` : `${date}T${pendingEndTime || "23:59"}`,
         location: pendingEvent.draft.location || "",
         description: pendingEvent.draft.description || "",
         reminder_minutes: 10,
@@ -1218,8 +1350,8 @@ function App() {
     try {
       const updated = await updateCalendarEvent(editableEvent.id, {
         title: editEventTitle.trim(),
-        start_time: updatedStart.toISOString(),
-        end_time: updatedEnd.toISOString(),
+        start_time: toLocalApiDateTime(editEventStart),
+        end_time: toLocalApiDateTime(editEventEnd),
         location: editEventLocation.trim(),
         description: editEventDescription.trim(),
       });
@@ -1229,8 +1361,8 @@ function App() {
       const updatedEvent: EditableCalendarEvent = normalizedUpdated || {
         id: editableEvent.id,
         title: editEventTitle.trim(),
-        start: updatedStart.toISOString(),
-        end: updatedEnd.toISOString(),
+        start: editEventStart,
+        end: editEventEnd,
         location: editEventLocation.trim(),
         description: editEventDescription.trim(),
       };
@@ -1330,6 +1462,32 @@ function App() {
 
     const timer = window.setInterval(() => {
       index += 1;
+
+      setDisplayedResponse(response.slice(0, index));
+
+      if (index >= response.length) {
+        window.clearInterval(timer);
+        setIsTypingResponse(false);
+      }
+    }, 38);
+
+    return () => window.clearInterval(timer);
+  }, [response, shouldTypeResponse]);
+  
+  useEffect(() => {
+    if (!shouldTypeResponse) {
+      setDisplayedResponse(response);
+      setIsTypingResponse(false);
+      return;
+    }
+
+    setDisplayedResponse("");
+    setIsTypingResponse(true);
+
+    let index = 0;
+
+    const timer = window.setInterval(() => {
+      index += 1;
       setDisplayedResponse(response.slice(0, index));
 
       if (index >= response.length) {
@@ -1399,7 +1557,7 @@ function App() {
               <Activity size={18} />
               <span>
                 {calendarConnected
-                  ? "calendar online · planning enabled"
+                  ? "calendar online"
                   : "agent idle · monitoring input"}
               </span>
             </div>
@@ -1466,9 +1624,19 @@ function App() {
             ) : (
               <>
                 <div className="typewriter-response">
-                  <ChatCalendarResponse
-                    response={shouldTypeResponse ? displayedResponse : response}
-                  />
+                  {calendarCardResponse ? (
+                    <>
+                      <p className="calendar-quick-text">{displayedResponse}</p>
+
+                      {!isTypingResponse && (
+                        <ChatCalendarResponse response={calendarCardResponse} />
+                      )}
+                    </>
+                  ) : (
+                    <ChatCalendarResponse
+                      response={shouldTypeResponse ? displayedResponse : response}
+                    />
+                  )}
                 </div>
                 
                 {eventOptions && (
@@ -1679,41 +1847,6 @@ function App() {
               </>
             )}
           </div>
-
-          {tomorrowPlan && (
-            <div className="response-console plan-console">
-              <p className="panel-label">tomorrow focus plan</p>
-
-              <div className="plan-section">
-                <strong>Recommendations</strong>
-                {tomorrowPlan.recommendations.map((item, index) => (
-                  <p key={index}>{item}</p>
-                ))}
-              </div>
-
-              <div className="plan-section">
-                <strong>Open focus blocks</strong>
-                {tomorrowPlan.free_focus_blocks.length === 0 ? (
-                  <p>No clean focus blocks found.</p>
-                ) : (
-                  tomorrowPlan.free_focus_blocks.map((block, index) => (
-                    <p key={index}>
-                      {block.start} - {block.end}
-                    </p>
-                  ))
-                )}
-              </div>
-
-              <div className="plan-section">
-                <strong>Suggested plan</strong>
-                {tomorrowPlan.suggested_plan.map((item, index) => (
-                  <p key={index}>
-                    {index + 1}. {item}
-                  </p>
-                ))}
-              </div>
-            </div>
-          )}
         </section>
 
         <aside className="side-panel right-panel">
@@ -1746,25 +1879,17 @@ function App() {
                     >
                       <div className="event-time-badge">
                         <span>
-                          {new Date(event.start).toLocaleDateString([], {
-                            weekday: "short",
-                          })}
+                          {formatUpcomingWeekday(event)}
                         </span>
                         <strong>
-                          {new Date(event.start).toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
+                          {formatUpcomingTime(event)}
                         </strong>
                       </div>
 
                       <div className="event-details">
                         <strong>{event.title}</strong>
                         <span>
-                          {new Date(event.start).toLocaleDateString([], {
-                            month: "short",
-                            day: "numeric",
-                          })}
+                          {formatUpcomingDate(event)}
                         </span>
                         {event.location && <small>{event.location}</small>}
                       </div>
