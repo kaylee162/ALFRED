@@ -1,19 +1,17 @@
 todos / bugs:
 
 general:
-add a quick summary after every request, including tools. for example, after "show me my calendar for this week" alfred should response, "absolutely, heres your calendar for the week. [quick summary such as] looks pretty light, you've got one event on monday, and two on saturday." 
-    this will make it more like a helpful assistant. 
-generate a todo list needs better UI
-summarize this week needs better UI
-    adding default styling to responses. this will solve the two above, and many other problems. having some basic fall back for outputs. 
+adding default styling to responses. this will solve the some problems with text output. having some basic fall back for outputs. 
 edit button doesnt disappear fast enough. when i put in a new command, edit button should disappear, not wait until the system outputs a new command
 similar thing - output should disappear once a new request gets sent, not once a new output is generated. 
+
 file manager needs some work. both with output and acutally finding files. find my resume doesnt work
 file manager can find some things, but need to improve UI. i.e. show downloads from the last 7 days
 folder navigation needs improving
     also prob gonna need to fix the UI
+
 better error handling for timeouts
-typing thing for immediate responses
+better error handling for bad requests. if alfred cant do something, dont quit and display a blank screen. 
 
 specific:
 weekly weather pulls a weird order. it should always have today at the first block, then the next 6 days after. 
@@ -23,7 +21,6 @@ show my events for July 24 doesnt work, just blank. too far in advance.
 alfred still cant find projects. issue with project finder / file manager / project launcher. "No folders or files found."
 open my resume doesnt work. tries to open src folder,   No folders or files found. i dont think alfred has access to downloads or Desktop
 add attachments. attach a file, and ask to explain this file. summarize this file or markdown. 
-immediate responses (like hey alfred) 
 
 ---
 
@@ -53,11 +50,9 @@ becoming an assistant
     integrating tools together
     giving more access to those tools to read and write (i.e. read this email, or reply to this email)
 
-
 ---
 
 adding some quirks!!
-hey alfred - should always respond with "hey kaylee, what's poppin"
 add more unique / technically cool systems checks that actually work. one for cpu? one to make sure all apis and connections are actually working (backend, frontend, etc.)
 adding more cool animations. like JARVIS
 
