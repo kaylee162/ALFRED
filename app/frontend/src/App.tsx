@@ -4,8 +4,13 @@ import {
   CalendarDays,
   ChevronDown,
   Cpu,
+  FileText,
   FolderOpen,
+  Inbox,
   Loader2,
+  Mail,
+  MailCheck,
+  MailOpen,
   Radio,
   Send,
   ShieldCheck,
@@ -14,7 +19,6 @@ import {
 
 import {
   createCalendarEvent,
-  createCalendarEventFromForm,
   updateCalendarEvent,
   deleteCalendarEvent,
 } from "./api/calendarApi";
@@ -81,6 +85,45 @@ type SystemCheckItem = {
   detail: string;
 };
 
+type EmailItem = {
+  id?: string;
+  thread_id?: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  snippet?: string;
+  body?: string;
+  is_unread?: boolean;
+};
+
+type EmailDraft = {
+  id?: string;
+  draft_id?: string;
+  message_id?: string;
+  to?: string;
+  subject?: string;
+  body?: string;
+};
+
+type EmailResponseData = {
+  type:
+    | "email"
+    | "email_list"
+    | "email_summary"
+    | "email_draft"
+    | "email_sent"
+    | "email_updated";
+
+  overview: string;
+  message: string;
+  summary?: string;
+  email?: EmailItem | null;
+  emails?: EmailItem[];
+  draft?: EmailDraft | null;
+};
+
 function getGreeting() {
   const hour = new Date().getHours();
 
@@ -97,6 +140,46 @@ function getThinkingSteps(command: string) {
       "Reading your calendar request",
       "Checking calendar tools",
       "Preparing the response",
+    ];
+  }
+
+  if (
+    lower.includes("email") ||
+    lower.includes("inbox") ||
+    lower.includes("gmail")
+  ) {
+    if (
+      lower.includes("draft") ||
+      lower.includes("compose") ||
+      lower.includes("write")
+    ) {
+      return [
+        "Reading the email details",
+        "Creating the Gmail draft",
+        "Preparing the draft preview",
+      ];
+    }
+
+    if (lower.includes("send")) {
+      return [
+        "Checking the recipient and message",
+        "Sending through Gmail",
+        "Confirming delivery",
+      ];
+    }
+
+    if (lower.includes("summarize")) {
+      return [
+        "Checking your inbox",
+        "Reviewing email previews",
+        "Preparing your briefing",
+      ];
+    }
+
+    return [
+      "Reading your email request",
+      "Checking Gmail",
+      "Preparing the results",
     ];
   }
 
@@ -645,6 +728,457 @@ function ChatWeatherResponse({ response }: { response: string }) {
   );
 }
 
+function EmailStatusBadge({ unread }: { unread?: boolean }) {
+  return (
+    <span className={`email-status-badge ${unread ? "unread" : "read"}`}>
+      {unread ? (
+        <>
+          <Mail size={13} />
+          Unread
+        </>
+      ) : (
+        <>
+          <MailOpen size={13} />
+          Read
+        </>
+      )}
+    </span>
+  );
+}
+
+function EmailMessageCard({
+  email,
+  expanded = false,
+}: {
+  email: EmailItem;
+  expanded?: boolean;
+}) {
+  const body =
+    email.body ||
+    email.snippet ||
+    "This email does not contain a readable preview.";
+
+  return (
+    <article className={`email-message-card ${email.is_unread ? "unread" : ""}`}>
+      <div className="email-message-top">
+        <div className="email-sender-icon">
+          {email.is_unread ? <Mail size={18} /> : <MailOpen size={18} />}
+        </div>
+
+        <div className="email-message-heading">
+          <strong>{email.subject || "(No subject)"}</strong>
+          <span>{email.from || "Unknown sender"}</span>
+        </div>
+
+        <EmailStatusBadge unread={email.is_unread} />
+      </div>
+
+      <div className="email-message-meta">
+        {email.to && (
+          <span>
+            <strong>To</strong>
+            {email.to}
+          </span>
+        )}
+
+        {email.date && (
+          <span>
+            <strong>Date</strong>
+            {email.date}
+          </span>
+        )}
+      </div>
+
+      <div className={`email-message-body ${expanded ? "expanded" : ""}`}>
+        {body}
+      </div>
+    </article>
+  );
+}
+
+type EmailBriefingSection = {
+  title: string;
+  items: string[];
+};
+
+type ParsedEmailBriefing = {
+  title: string;
+  sections: EmailBriefingSection[];
+};
+
+function cleanBriefingLine(value: string) {
+  return value
+    .replace(/^\*\*/, "")
+    .replace(/\*\*:?\s*$/, "")
+    .replace(/^#+\s*/, "")
+    .trim();
+}
+
+function parseEmailBriefing(
+  summary: string
+): ParsedEmailBriefing {
+  const lines = summary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let title = "Inbox Briefing";
+  const sections: EmailBriefingSection[] = [];
+  let currentSection: EmailBriefingSection | null = null;
+
+  lines.forEach((line, index) => {
+    const isMarkdownHeading =
+      /^\*\*.+?\*\*:?\s*$/.test(line);
+
+    const isPlainHeading =
+      /^(Inbox Briefing|Overview|Important\/Missing Actions|Visible Deadlines\/Meetings\/Payments|Replies Needed|FYI Section):?$/i.test(
+        cleanBriefingLine(line)
+      );
+
+    if (
+      index === 0 &&
+      cleanBriefingLine(line).toLowerCase() ===
+        "inbox briefing"
+    ) {
+      title = "Inbox Briefing";
+      return;
+    }
+
+    if (isMarkdownHeading || isPlainHeading) {
+      const sectionTitle = cleanBriefingLine(line);
+
+      if (
+        sectionTitle.toLowerCase() ===
+        "inbox briefing"
+      ) {
+        title = sectionTitle;
+        return;
+      }
+
+      currentSection = {
+        title: sectionTitle.replace(/:$/, ""),
+        items: [],
+      };
+
+      sections.push(currentSection);
+      return;
+    }
+
+    const cleanedItem = line
+      .replace(/^[-•]\s*/, "")
+      .replace(/^\d+\.\s*/, "")
+      .trim();
+
+    if (!cleanedItem) return;
+
+    if (!currentSection) {
+      currentSection = {
+        title: "Overview",
+        items: [],
+      };
+
+      sections.push(currentSection);
+    }
+
+    currentSection.items.push(cleanedItem);
+  });
+
+  return {
+    title,
+    sections,
+  };
+}
+
+function EmailBriefing({
+  summary,
+}: {
+  summary: string;
+}) {
+  const {
+    displayedText,
+    isTyping,
+  } = useTypewriter(summary, true, 15);
+
+  const parsed = parseEmailBriefing(displayedText);
+
+  function getSectionClass(title: string) {
+    const normalized = title.toLowerCase();
+
+    if (
+      normalized.includes("important") ||
+      normalized.includes("action")
+    ) {
+      return "actions";
+    }
+
+    if (
+      normalized.includes("deadline") ||
+      normalized.includes("meeting") ||
+      normalized.includes("payment")
+    ) {
+      return "deadlines";
+    }
+
+    if (normalized.includes("replies")) {
+      return "replies";
+    }
+
+    if (normalized.includes("fyi")) {
+      return "fyi";
+    }
+
+    return "overview";
+  }
+
+  return (
+    <section
+      className={`email-briefing ${
+        isTyping ? "typing" : "complete"
+      }`}
+    >
+      <div className="email-briefing-header">
+        <div>
+          <p className="panel-label">
+            intelligence summary
+          </p>
+          <h3>{parsed.title}</h3>
+        </div>
+
+        <span className="email-briefing-status">
+          {isTyping ? "Analyzing" : "Complete"}
+        </span>
+      </div>
+
+      <div className="email-briefing-sections">
+        {parsed.sections.map((section, index) => (
+          <div
+            className={`email-briefing-section ${getSectionClass(
+              section.title
+            )}`}
+            key={`${section.title}-${index}`}
+          >
+            <div className="email-briefing-section-heading">
+              <span className="email-briefing-index">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+
+              <strong>{section.title}</strong>
+            </div>
+
+            <div className="email-briefing-items">
+              {section.items.map((item, itemIndex) => (
+                <div
+                  className="email-briefing-item"
+                  key={`${item}-${itemIndex}`}
+                >
+                  <span />
+                  <p>{item}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ChatEmailResponse({
+  data,
+}: {
+  data: EmailResponseData;
+}) {
+  const emails = data.emails || [];
+  const isSingleEmail = Boolean(data.email);
+  const isSummary = data.type === "email_summary";
+  const isDraft = data.type === "email_draft";
+  const isSent = data.type === "email_sent";
+
+  if (isDraft) {
+    return (
+      <div className="chat-email-card">
+        <div className="chat-email-header">
+          <div className="chat-email-header-icon">
+            <FileText size={19} />
+          </div>
+
+          <div>
+            <p className="panel-label">email draft</p>
+            <h3>Draft Created</h3>
+          </div>
+        </div>
+
+        <div className="email-action-banner success">
+          <MailCheck size={17} />
+          <span>{data.message}</span>
+        </div>
+
+        {data.draft && (
+          <div className="email-draft-preview">
+            <div className="email-draft-field">
+              <span>To</span>
+              <strong>{data.draft.to || "Recipient saved in Gmail"}</strong>
+            </div>
+
+            <div className="email-draft-field">
+              <span>Subject</span>
+              <strong>{data.draft.subject || "(No subject)"}</strong>
+            </div>
+
+            {data.draft.body && (
+              <div className="email-draft-body">
+                {data.draft.body}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (isSent) {
+    return (
+      <div className="chat-email-card">
+        <div className="chat-email-header">
+          <div className="chat-email-header-icon">
+            <Send size={19} />
+          </div>
+
+          <div>
+            <p className="panel-label">email action</p>
+            <h3>Email Sent</h3>
+          </div>
+        </div>
+
+        <div className="email-action-banner success">
+          <MailCheck size={17} />
+          <span>{data.message}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-email-card">
+      <div className="chat-email-header">
+        <div className="chat-email-header-icon">
+          {isSummary ? (
+            <FileText size={19} />
+          ) : (
+            <Inbox size={19} />
+          )}
+        </div>
+
+        <div>
+          <p className="panel-label">
+            {isSummary
+              ? "email intelligence"
+              : "gmail response"}
+          </p>
+
+          <h3>
+            {isSummary
+              ? "Inbox Analysis"
+              : isSingleEmail
+                ? "Email Message"
+                : `${emails.length} ${
+                    emails.length === 1
+                      ? "Email"
+                      : "Emails"
+                  }`}
+          </h3>
+        </div>
+      </div>
+
+      {isSummary && data.summary && (
+        <EmailBriefing summary={data.summary} />
+      )}
+
+      {data.email && (
+        <div className="email-message-list">
+          <EmailMessageCard
+            email={data.email}
+            expanded
+          />
+        </div>
+      )}
+
+      {!data.email && emails.length > 0 && (
+        <>
+          {isSummary && (
+            <div className="email-source-divider">
+              <span>Source Emails</span>
+            </div>
+          )}
+
+          <div className="email-message-list">
+            {emails.map((email, index) => (
+              <EmailMessageCard
+                email={email}
+                key={
+                  email.id ||
+                  `${email.subject}-${index}`
+                }
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function useTypewriter(
+  text: string,
+  enabled: boolean,
+  speed = 18
+) {
+  const [displayedText, setDisplayedText] =
+    useState(enabled ? "" : text);
+
+  const [isTyping, setIsTyping] =
+    useState(enabled && text.length > 0);
+
+  useEffect(() => {
+    if (!enabled) {
+      setDisplayedText(text);
+      setIsTyping(false);
+      return;
+    }
+
+    if (!text) {
+      setDisplayedText("");
+      setIsTyping(false);
+      return;
+    }
+
+    setDisplayedText("");
+    setIsTyping(true);
+
+    let index = 0;
+
+    const timer = window.setInterval(() => {
+      index += 1;
+      setDisplayedText(text.slice(0, index));
+
+      if (index >= text.length) {
+        window.clearInterval(timer);
+        setDisplayedText(text);
+        setIsTyping(false);
+      }
+    }, speed);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [text, enabled, speed]);
+
+  return {
+    displayedText,
+    isTyping,
+  };
+}
+
 function ChatCalendarResponse({ response }: { response: string }) {
   const parsed = parseCalendarResponse(response);
   const [openDayIndex, setOpenDayIndex] = useState<number | null>(null);
@@ -878,6 +1412,98 @@ function normalizeProjectItems(items: any[]): ProjectItem[] {
   });
 }
 
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`
+) {
+  return count === 1 ? singular : plural;
+}
+
+function buildAlfredOverview(
+  data: any,
+  command: string
+): string {
+  const lower = command.toLowerCase();
+
+  if (data.type === "email_summary") {
+    const count = Array.isArray(data.emails)
+      ? data.emails.length
+      : 0;
+
+    if (count === 0) {
+      return "Absolutely. I checked your inbox, but I couldn’t find any emails matching that request.";
+    }
+
+    return (
+      `Absolutely, here’s a briefing on your ${count} latest ` +
+      `${pluralize(count, "email")}.`
+    );
+  }
+
+  if (data.type === "email_list") {
+    const count = Array.isArray(data.emails)
+      ? data.emails.length
+      : 0;
+
+    if (count === 0) {
+      return "Absolutely. I checked your inbox, but I couldn’t find any matching emails.";
+    }
+
+    const unreadText = lower.includes("unread")
+      ? " unread"
+      : "";
+
+    return (
+      `Absolutely, here ${count === 1 ? "is" : "are"} your ` +
+      `${count} latest${unreadText} ${pluralize(count, "email")}.`
+    );
+  }
+
+  if (data.type === "email") {
+    const subject = data.email?.subject;
+
+    return subject
+      ? `Absolutely, here’s the email titled “${subject}.”`
+      : "Absolutely, here’s the email you asked me to read.";
+  }
+
+  if (data.type === "email_draft") {
+    const recipient = data.draft?.to;
+
+    return recipient
+      ? `Absolutely, I created an email draft for ${recipient}.`
+      : "Absolutely, I created that email draft for you.";
+  }
+
+  if (data.type === "email_sent") {
+    const recipient =
+      data.email?.to ||
+      data.sent_email?.to;
+
+    return recipient
+      ? `Absolutely, I sent your email to ${recipient}.`
+      : "Absolutely, your email has been sent.";
+  }
+
+  if (
+    data.type === "project_list" ||
+    data.type === "projects" ||
+    data.type === "project_explorer"
+  ) {
+    return (
+      data.message ||
+      "Absolutely, I found your project files and loaded them below."
+    );
+  }
+
+  if (data.type === "weather") {
+    return "Absolutely, here’s the weather information you asked for.";
+  }
+
+  return "";
+}
+
 function App() {
   const [command, setCommand] = useState("");
   const startupMessage = `${getGreeting()}, Kaylee. Running systems check...`;
@@ -888,17 +1514,13 @@ function App() {
   const [projectExplorer, setProjectExplorer] =
     useState<ProjectExplorerData | null>(null);
 
+  const [emailResponse, setEmailResponse] =
+    useState<EmailResponseData | null>(null);
   const [calendarCardResponse, setCalendarCardResponse] = useState("");
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarStatus, setCalendarStatus] = useState("calendar not checked");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
 
-  const [eventTitle, setEventTitle] = useState("");
-  const [eventDateTime, setEventDateTime] = useState("");
-  const [eventLocation, setEventLocation] = useState("");
-  const [eventDescription, setEventDescription] = useState("");
-  const [eventStatus, setEventStatus] = useState("");
-  const [eventDurationMinutes, setEventDurationMinutes] = useState(60);
   const [eventOptions, setEventOptions] = useState<EventOptionsPayload | null>(null);
 
   const [editableEvent, setEditableEvent] =
@@ -919,7 +1541,7 @@ function App() {
   const [pendingStatus, setPendingStatus] = useState("");
   
   const [showStartupChecks, setShowStartupChecks] = useState(true);
-  const [backendOnline, setBackendOnline] = useState(false);
+  const [, setBackendOnline] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
   const [systemChecks, setSystemChecks] = useState<SystemCheckItem[]>([
@@ -951,10 +1573,16 @@ function App() {
     setDisplayedResponse("");
     setShouldTypeResponse(false);
     setCalendarCardResponse("");
+    setEmailResponse(null);
     setEventOptions(null);
 
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 35000);
+    const REQUEST_TIMEOUT_MS = 90_000;
+
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
 
     try {
       const res = await fetch(`${API_BASE}/command`, {
@@ -1011,21 +1639,61 @@ function App() {
           items: normalizeProjectItems(rawItems),
         });
 
-        setShouldTypeResponse(false);
+        const overview =
+          data.message ||
+          "Absolutely, I found your projects and loaded them below.";
+
         setResponse(
-          visibleResponse ||
+          overview ||
+            visibleResponse ||
             data.message ||
             data.response ||
             "Project explorer loaded."
         );
+        setShouldTypeResponse(true);
       } else if (data.type === "project_explorer" && data.project_data) {
         setProjectExplorer({
           ...data.project_data,
           items: normalizeProjectItems(data.project_data.items || []),
         });
 
-        setShouldTypeResponse(false);
-        setResponse(visibleResponse || "Project explorer loaded.");
+        const overview =
+          data.message ||
+          visibleResponse ||
+          "Absolutely, I loaded that project folder for you.";
+
+        setResponse(overview);
+        setShouldTypeResponse(true);
+      } else if (
+        [
+          "email",
+          "email_list",
+          "email_summary",
+          "email_draft",
+          "email_sent",
+          "email_updated",
+        ].includes(data.type)
+      ) {
+        setProjectExplorer(null);
+        setCalendarCardResponse("");
+
+        const overview = buildAlfredOverview(
+          data,
+          trimmedCommand
+        );
+
+        setEmailResponse({
+          type: data.type,
+          overview,
+          message: data.response || overview,
+          summary: data.summary || "",
+          email: data.email || null,
+          emails: data.emails || [],
+          draft: data.draft || null,
+        });
+
+        setResponse(overview);
+        setShouldTypeResponse(true);
       } else {
         setProjectExplorer(null);
 
@@ -1053,7 +1721,9 @@ function App() {
       let message = "Something went wrong, but ALFRED is still running.";
 
       if (error?.name === "AbortError") {
-        message = "That request took too long, so I stopped waiting. Try again with a shorter request.";
+        message =
+          "That request took longer than expected. ALFRED is still running. " +
+          "Try requesting fewer emails, such as your five newest unread messages.";
       } else if (error?.message?.includes("Failed to fetch")) {
         message = "I couldn’t reach the backend. Make sure the FastAPI server is running.";
       } else if (error?.message) {
@@ -1061,7 +1731,8 @@ function App() {
       }
 
       setProjectExplorer(null);
-      setCalendarCardResponse("");
+        setCalendarCardResponse("");
+      setEmailResponse(null);
       setEventOptions(null);
       setPendingEvent(null);
       setEditableEvent(null);
@@ -1174,75 +1845,6 @@ function App() {
     }
   }
 
-  async function handleCreateEvent(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-
-    if (!eventTitle.trim() || !eventDateTime) {
-      setEventStatus("Add a title and date/time first.");
-      return;
-    }
-
-    setEventStatus("Creating event...");
-
-    try {
-      const created = await createCalendarEventFromForm({
-        title: eventTitle.trim(),
-        dateTime: eventDateTime,
-        location: eventLocation.trim(),
-        description: eventDescription.trim(),
-        durationMinutes: eventDurationMinutes,
-        reminderMinutes: 10,
-      });
-
-      const createdStart = created.start;
-      const createdEnd =
-        created.end ||
-        new Date(new Date(createdStart).getTime() + eventDurationMinutes * 60 * 1000).toISOString();
-
-      const createdEvent: EditableCalendarEvent = {
-        id: created.id,
-        title: created.title,
-        start: createdStart,
-        end: createdEnd,
-        location: created.location,
-        description: created.description,
-      };
-
-      setEditableEvent(createdEvent);
-      setIsEditingEvent(false);
-      setEventStatus("Event created.");
-      setShouldTypeResponse(true);
-      setResponse(
-        `Created calendar event: ${createdEvent.title}\n` +
-          `When: ${new Date(createdEvent.start).toLocaleString([], {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          })}\n` +
-          `Ends: ${new Date(createdEvent.end).toLocaleString([], {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          })}\n` +
-          `Location: ${createdEvent.location || "None"}`
-      );
-
-      setEventTitle("");
-      setEventDateTime("");
-      setEventLocation("");
-      setEventDescription("");
-      setEventDurationMinutes(60);
-
-      loadUpcomingEvents();
-    } catch {
-      setEventStatus("Could not create event.");
-    }
-  }
-
   async function runSystemCheck() {
     const checks: SystemCheckItem[] = [];
 
@@ -1346,16 +1948,6 @@ function App() {
     setEditEventDescription(eventWithEnd.description || "");
     setEditEventStatus("");
     setIsEditingEvent(true);
-  }
-
-  function closeEventEditor() {
-    setIsEditingEvent(false);
-    setEditEventTitle("");
-    setEditEventStart("");
-    setEditEventEnd("");
-    setEditEventLocation("");
-    setEditEventDescription("");
-    setEditEventStatus("");
   }
 
   async function handleUpdateEvent(e: FormEvent<HTMLFormElement>) {
@@ -1486,28 +2078,8 @@ function App() {
       return;
     }
 
-    setDisplayedResponse("");
-    setIsTypingResponse(true);
-
-    let index = 0;
-
-    const timer = window.setInterval(() => {
-      index += 1;
-
-      setDisplayedResponse(response.slice(0, index));
-
-      if (index >= response.length) {
-        window.clearInterval(timer);
-        setIsTypingResponse(false);
-      }
-    }, 38);
-
-    return () => window.clearInterval(timer);
-  }, [response, shouldTypeResponse]);
-  
-  useEffect(() => {
-    if (!shouldTypeResponse) {
-      setDisplayedResponse(response);
+    if (!response) {
+      setDisplayedResponse("");
       setIsTypingResponse(false);
       return;
     }
@@ -1523,11 +2095,14 @@ function App() {
 
       if (index >= response.length) {
         window.clearInterval(timer);
+        setDisplayedResponse(response);
         setIsTypingResponse(false);
       }
-    }, 38);
+    }, 32);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [response, shouldTypeResponse]);
 
   return (
@@ -1599,7 +2174,7 @@ function App() {
            <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.6
+              Adaptive Learning Framework for Responsive Executive Decisions V.6.2
             </p>
           </div>
 
@@ -1645,13 +2220,31 @@ function App() {
               </div>
             )}
             {isProcessing ? (
-                <ProcessingPanel steps={thinkingSteps} />
-              ) : projectExplorer ? (
-              <ProjectExplorer
-                data={projectExplorer}
-                onFolderClick={loadProjectFolder}
-                onOpenProject={openProject}
-              />
+              <ProcessingPanel steps={thinkingSteps} />
+            ) : projectExplorer ? (
+              <div className="structured-response-stack">
+                <p className="alfred-response-overview">
+                  {displayedResponse}
+                </p>
+
+                {!isTypingResponse && (
+                  <ProjectExplorer
+                    data={projectExplorer}
+                    onFolderClick={loadProjectFolder}
+                    onOpenProject={openProject}
+                  />
+                )}
+              </div>
+            ) : emailResponse ? (
+              <div className="structured-response-stack">
+                <p className="alfred-response-overview">
+                  {displayedResponse}
+                </p>
+
+                {!isTypingResponse && (
+                  <ChatEmailResponse data={emailResponse} />
+                )}
+              </div>
             ) : (
               <>
                 <div className="typewriter-response">

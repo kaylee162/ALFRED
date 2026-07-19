@@ -37,6 +37,26 @@ from weather_tools.weather_service import (
     get_rain_chance_tomorrow,
 )
 
+from gmail_tools.gmail_intent import (
+    handle_create_email_draft,
+    handle_create_reply_draft,
+    handle_list_recent_emails,
+    handle_list_unread_emails,
+    handle_read_email,
+    handle_read_latest_email,
+    handle_search_emails,
+    summarize_email,
+    summarize_emails,
+)
+
+from gmail_tools.gmail_service import (
+    archive_email,
+    mark_email_read,
+    mark_email_unread,
+    send_draft,
+    send_email as gmail_send_email,
+)
+
 def _format_event(event: dict) -> str:
     title = event.get("title", "Untitled")
     start = event.get("start", "Unknown time")
@@ -357,10 +377,292 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
             "type": "calendar_events",
             "events": events,
         }
+    
+    # Gmail tools
+    if tool_name == "list_unread_emails":
+        result = handle_list_unread_emails(
+            max_results=arguments.get("max_results", 10),
+        )
 
-    if tool_name == "email":
         return {
-            "response": "Email tools are not connected yet.",
+            **result,
+            "type": "email_list",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "list_recent_emails":
+        result = handle_list_recent_emails(
+            max_results=arguments.get("max_results", 10),
+        )
+
+        return {
+            **result,
+            "type": "email_list",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "search_emails":
+        query = arguments.get("query", "in:inbox").strip() or "in:inbox"
+
+        result = handle_search_emails(
+            query=query,
+            max_results=arguments.get("max_results", 10),
+        )
+
+        return {
+            **result,
+            "type": "email_list",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "read_email":
+        message_id = arguments.get("message_id")
+
+        if not message_id:
+            return {
+                "response": (
+                    "I need the email's message ID before I can read it."
+                ),
+                "type": "email_error",
+                "requires_confirmation": False,
+            }
+
+        result = handle_read_email(
+            message_id=message_id,
+            mark_as_read=arguments.get("mark_as_read", True),
+        )
+
+        return {
+            **result,
+            "type": "email",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "read_latest_email":
+        result = handle_read_latest_email(
+            query=arguments.get("query", "in:inbox"),
+            mark_as_read=arguments.get("mark_as_read", True),
+        )
+
+        return {
+            **result,
+            "type": "email",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "summarize_email":
+        message_id = arguments.get("message_id")
+
+        if not message_id:
+            return {
+                "response": (
+                    "I need the email's message ID before I can summarize it."
+                ),
+                "type": "email_error",
+                "requires_confirmation": False,
+            }
+
+        result = summarize_email(message_id=message_id)
+
+        return {
+            **result,
+            "type": "email_summary",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "summarize_emails":
+        result = summarize_emails(
+            query=arguments.get(
+                "query",
+                "in:inbox is:unread",
+            ),
+            max_results=arguments.get("max_results", 10),
+        )
+
+        return {
+            **result,
+            "type": "email_summary",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "create_email_draft":
+        required_fields = [
+            field
+            for field in ("to", "subject", "body")
+            if not arguments.get(field)
+        ]
+
+        if required_fields:
+            return {
+                "response": (
+                    "I still need the following before I can create the draft: "
+                    + ", ".join(required_fields)
+                    + "."
+                ),
+                "type": "email_missing_fields",
+                "requires_confirmation": False,
+            }
+
+        result = handle_create_email_draft(
+            to=arguments["to"],
+            subject=arguments["subject"],
+            body=arguments["body"],
+            cc=arguments.get("cc"),
+            bcc=arguments.get("bcc"),
+        )
+
+        return {
+            **result,
+            "type": "email_draft",
+            "requires_confirmation": False,
+        }
+    
+    if tool_name == "create_reply_draft":
+        message_id = arguments.get("message_id")
+        body = arguments.get("body")
+
+        if not message_id or not body:
+            return {
+                "response": (
+                    "I need the original email ID and the reply text "
+                    "before I can create a reply draft."
+                ),
+                "type": "email_missing_fields",
+                "requires_confirmation": False,
+            }
+
+        result = handle_create_reply_draft(
+            message_id=message_id,
+            body=body,
+        )
+
+        return {
+            **result,
+            "type": "email_draft",
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "send_email":
+        required_fields = [
+            field
+            for field in ("to", "subject", "body")
+            if not arguments.get(field)
+        ]
+
+        if required_fields:
+            return {
+                "response": (
+                    "I still need the following before I can send it: "
+                    + ", ".join(required_fields)
+                    + "."
+                ),
+                "type": "email_missing_fields",
+                "requires_confirmation": False,
+            }
+
+        sent = gmail_send_email(
+            to=arguments["to"],
+            subject=arguments["subject"],
+            body=arguments["body"],
+            cc=arguments.get("cc"),
+            bcc=arguments.get("bcc"),
+        )
+
+        return {
+            "response": (
+                f"Absolutely, I sent the email to {arguments['to']}."
+            ),
+            "type": "email_sent",
+            "email": {
+                "to": arguments["to"],
+                "subject": arguments["subject"],
+                "body": arguments["body"],
+            },
+            "sent_email": sent,
+            "requires_confirmation": False,
+        }
+    
+    if tool_name == "send_email_draft":
+        draft_id = arguments.get("draft_id")
+
+        if not draft_id:
+            return {
+                "response": (
+                    "I need the Gmail draft ID before I can send that draft."
+                ),
+                "type": "email_error",
+                "requires_confirmation": False,
+            }
+
+        sent = send_draft(draft_id=draft_id)
+
+        return {
+            "response": "Absolutely, I sent the saved email draft.",
+            "type": "email_sent",
+            "sent_email": sent,
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "mark_email_read":
+        message_id = arguments.get("message_id")
+
+        if not message_id:
+            return {
+                "response": (
+                    "I need the email's message ID before I can mark it read."
+                ),
+                "type": "email_error",
+                "requires_confirmation": False,
+            }
+
+        result = mark_email_read(message_id=message_id)
+
+        return {
+            "response": "Absolutely, I marked that email as read.",
+            "type": "email_updated",
+            "email_result": result,
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "mark_email_unread":
+        message_id = arguments.get("message_id")
+
+        if not message_id:
+            return {
+                "response": (
+                    "I need the email's message ID before I can mark it unread."
+                ),
+                "type": "email_error",
+                "requires_confirmation": False,
+            }
+
+        result = mark_email_unread(message_id=message_id)
+
+        return {
+            "response": "Absolutely, I marked that email as unread.",
+            "type": "email_updated",
+            "email_result": result,
+            "requires_confirmation": False,
+        }
+
+    if tool_name == "archive_email":
+        message_id = arguments.get("message_id")
+
+        if not message_id:
+            return {
+                "response": (
+                    "I need the email's message ID before I can archive it."
+                ),
+                "type": "email_error",
+                "requires_confirmation": False,
+            }
+
+        result = archive_email(message_id=message_id)
+
+        return {
+            "response": "Absolutely, I archived that email.",
+            "type": "email_updated",
+            "email_result": result,
             "requires_confirmation": False,
         }
     

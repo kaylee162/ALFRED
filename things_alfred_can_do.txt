@@ -92,6 +92,22 @@ what's the humidity today
 what's the chance of rain tomorrow
 what's the weather in New York tomorrow
 
+Gmail 
+
+Show me my 10 newest unread emails.
+Summarize my unread inbox.
+Summarize emails from John.
+Find emails about my timecard.
+Read my latest email.
+Read the latest email from jane@example.com.
+Draft an email to jane@example.com about tomorrow's meeting.
+Create a reply draft thanking them for the update.
+Send the email now.
+Archive that email.
+Mark that email as read.
+Draft an email to jane@example.com with subject Project Update and say the latest version is ready.
+Send an email to jane@example.com with subject Project Update and say the latest version is ready.
+
 Updated Error handling
 
 Bad requests and how they are handled:
