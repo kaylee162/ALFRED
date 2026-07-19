@@ -57,6 +57,180 @@ def _extract_weather_location(command: str) -> str:
 
     return "Atlanta"
 
+def _extract_email_address(command: str) -> str | None:
+    match = re.search(
+        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        command,
+        flags=re.IGNORECASE,
+    )
+
+    return match.group(0) if match else None
+
+
+def _extract_email_subject(command: str) -> str | None:
+    patterns = [
+        r"\bwith (?:the )?subject\s+[\"'](.+?)[\"']"
+        r"(?:\s+(?:and|that|saying|says|body)\b|$)",
+
+        r"\bwith (?:the )?subject\s+(.+?)"
+        r"(?:\s+(?:and say|and saying|saying|that says|with body)\b|$)",
+
+        r"\bsubject\s*:\s*(.+?)"
+        r"(?:\s+(?:body\s*:|message\s*:)|$)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, command, flags=re.IGNORECASE)
+
+        if match:
+            subject = match.group(1).strip(" .,\"'")
+            if subject:
+                return subject
+
+    return None
+
+
+def _extract_email_body(command: str) -> str | None:
+    patterns = [
+        r"\b(?:and say|and saying|that says|saying)\s+[\"']?(.+?)[\"']?$",
+        r"\b(?:with body|body\s*:|message\s*:)\s+[\"']?(.+?)[\"']?$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, command, flags=re.IGNORECASE)
+
+        if match:
+            body = match.group(1).strip(" \"'")
+            if body:
+                return body
+
+    return None
+
+
+def _parse_email_composition(command: str) -> dict | None:
+    text = command.lower()
+
+    is_draft = any(
+        phrase in text
+        for phrase in [
+            "draft an email",
+            "draft email",
+            "create an email draft",
+            "compose an email",
+            "write an email",
+        ]
+    )
+
+    is_send = any(
+        phrase in text
+        for phrase in [
+            "send an email",
+            "send email",
+            "email ",
+        ]
+    ) and not is_draft
+
+    if not is_draft and not is_send:
+        return None
+
+    recipient = _extract_email_address(command)
+    subject = _extract_email_subject(command)
+    body = _extract_email_body(command)
+
+    missing_fields = []
+
+    if not recipient:
+        missing_fields.append("recipient email address")
+
+    if not subject:
+        missing_fields.append("subject")
+
+    if not body:
+        missing_fields.append("message")
+
+    if missing_fields:
+        return {
+            "mode": "missing_email_fields",
+            "missing_fields": missing_fields,
+        }
+
+    return {
+        "mode": "tool",
+        "tool": "create_email_draft" if is_draft else "send_email",
+        "arguments": {
+            "to": recipient,
+            "subject": subject,
+            "body": body,
+        },
+    }
+
+def _extract_requested_count(
+    text: str,
+    default: int = 10,
+    maximum: int = 50,
+) -> int:
+    """
+    Extract a requested result count from commands such as:
+    - show my 5 newest emails
+    - list 10 unread emails
+    """
+    match = re.search(r"\b(\d{1,2})\b", text)
+
+    if not match:
+        return default
+
+    return max(1, min(int(match.group(1)), maximum))
+
+
+def _extract_email_address(text: str) -> str | None:
+    match = re.search(
+        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    return match.group(0) if match else None
+
+
+def _extract_sender_phrase(command: str) -> str | None:
+    """
+    Extract a sender from phrases such as:
+    - emails from John
+    - latest email from jane@example.com
+    """
+    match = re.search(
+        r"\bfrom\s+(.+?)(?:\s+about\b|\s+with\b|\s+that\b|$)",
+        command,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    sender = match.group(1).strip(" .?!")
+
+    return sender or None
+
+
+def _extract_email_topic(command: str) -> str | None:
+    """
+    Extract search text from phrases such as:
+    - emails about my timecard
+    - find emails regarding payroll
+    """
+    match = re.search(
+        r"\b(?:about|regarding|related to)\s+(.+)$",
+        command,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    topic = match.group(1).strip(" .?!")
+
+    return topic or None
+
 TOOL_KEYWORDS = [
     "project",
     "projects",
@@ -187,6 +361,28 @@ Weather rules:
 Tool rules:
 - When a user asks to do something ALFRED can do, call the correct tool.
 - Do not say you are showing or opening something unless a tool was actually called.
+
+Gmail rules:
+- Use list_unread_emails to show unread inbox messages.
+- Use list_recent_emails to show recent inbox messages.
+- Use search_emails to find emails by sender, subject, keyword, date, or Gmail query.
+- Use read_latest_email when the user asks to read their latest or newest email.
+- Use read_email when a Gmail message ID is already known.
+- Use summarize_email to summarize one known Gmail message.
+- Use summarize_emails for an inbox briefing or several matching emails.
+- Use create_email_draft when the user says draft, write, compose, or prepare.
+- Do not send an email merely because the user asked to draft it.
+- Use send_email only when the user explicitly asks to send it now.
+- Use create_reply_draft when the user asks to draft a reply.
+- Use send_email_draft only when the user explicitly confirms sending a saved draft.
+- Use mark_email_read and mark_email_unread only when a Gmail message ID is known.
+- Use archive_email only when a Gmail message ID is known.
+- Gmail searches should use Gmail syntax such as:
+  in:inbox
+  is:unread
+  from:person@example.com
+  subject:timecard
+  newer_than:7d
 """
 
 
@@ -221,6 +417,11 @@ def _classify_command(command: str) -> dict:
     command = _normalize_command(command)
     text = command.lower()
     location = _extract_weather_location(command)
+
+    email_composition = _parse_email_composition(command)
+
+    if email_composition:
+        return email_composition
 
     # Strong tool shortcuts
     if "show me my projects" in text or "list my projects" in text:
@@ -278,15 +479,134 @@ def _classify_command(command: str) -> dict:
                 "command": command,
             },
         }
+    
+    is_email_request = any(
+        phrase in text
+        for phrase in [
+            "email",
+            "emails",
+            "inbox",
+            "gmail",
+        ]
+    )
 
-    if any(phrase in text for phrase in ["my emails", "my inbox", "summarize emails", "summarize my emails"]):
-        return {
-            "mode": "tool",
-            "tool": "email",
-            "arguments": {
-                "command": command,
-            },
-        }
+    if is_email_request:
+        max_results = _extract_requested_count(text, default=10)
+
+        if "summarize" in text or "briefing" in text:
+            query_parts = ["in:inbox"]
+
+            if "unread" in text:
+                query_parts.append("is:unread")
+
+            sender = _extract_sender_phrase(command)
+            topic = _extract_email_topic(command)
+
+            if sender:
+                query_parts.append(f'from:"{sender}"')
+
+            if topic:
+                query_parts.append(f'"{topic}"')
+
+            return {
+                "mode": "tool",
+                "tool": "summarize_emails",
+                "arguments": {
+                    "query": " ".join(query_parts),
+                    "max_results": min(max_results, 10),
+                },
+            }
+
+        if (
+            ("read" in text or "open" in text)
+            and any(
+                phrase in text
+                for phrase in [
+                    "latest email",
+                    "newest email",
+                    "most recent email",
+                    "last email",
+                ]
+            )
+        ):
+            query_parts = ["in:inbox"]
+            sender = _extract_sender_phrase(command)
+
+            if sender:
+                query_parts.append(f'from:"{sender}"')
+
+            return {
+                "mode": "tool",
+                "tool": "read_latest_email",
+                "arguments": {
+                    "query": " ".join(query_parts),
+                    "mark_as_read": True,
+                },
+            }
+
+        if "unread" in text and any(
+            word in text
+            for word in [
+                "show",
+                "list",
+                "find",
+                "newest",
+                "recent",
+                "latest",
+                "inbox",
+                "emails",
+            ]
+        ):
+            return {
+                "mode": "tool",
+                "tool": "list_unread_emails",
+                "arguments": {
+                    "max_results": max_results,
+                },
+            }
+        
+        if any(word in text for word in ["find", "search", "look for"]):
+            query_parts = ["in:inbox"]
+            sender = _extract_sender_phrase(command)
+            topic = _extract_email_topic(command)
+            email_address = _extract_email_address(command)
+
+            if email_address:
+                query_parts.append(f"from:{email_address}")
+            elif sender:
+                query_parts.append(f'from:"{sender}"')
+
+            if topic:
+                query_parts.append(f'"{topic}"')
+
+            return {
+                "mode": "tool",
+                "tool": "search_emails",
+                "arguments": {
+                    "query": " ".join(query_parts),
+                    "max_results": max_results,
+                },
+            }
+        
+        if any(
+            phrase in text
+            for phrase in [
+                "show my inbox",
+                "show me my inbox",
+                "list my emails",
+                "show my emails",
+                "recent emails",
+                "newest emails",
+                "latest emails",
+            ]
+        ):
+            return {
+                "mode": "tool",
+                "tool": "list_recent_emails",
+                "arguments": {
+                    "max_results": max_results,
+                },
+            }
     
     if any(
         phrase in text
@@ -465,6 +785,26 @@ def handle_ai_command(command: str) -> dict:
 
     try:
         decision = _classify_command(command)
+
+        if decision.get("mode") == "missing_email_fields":
+            missing = decision.get("missing_fields", [])
+
+            if len(missing) == 1:
+                missing_text = missing[0]
+            else:
+                missing_text = (
+                    ", ".join(missing[:-1])
+                    + f", and {missing[-1]}"
+                )
+
+            return {
+                "response": (
+                    "I can prepare that email, but I still need the "
+                    f"{missing_text}."
+                ),
+                "requires_confirmation": False,
+                "type": "email_missing_fields",
+            }
     except TimeoutError:
         return {
             "response": "That took too long to process. Try asking again with a different command.",
@@ -504,11 +844,68 @@ def handle_ai_command(command: str) -> dict:
 
             return result
 
-        except Exception as e:
-            print(f"Tool failed: {tool_name}", e)
+        except FileNotFoundError as exc:
+            print(f"Tool configuration failed: {tool_name}", exc)
 
             return {
-                "response": f"I understood the request, but the {tool_name} tool failed. Try again or check that the service is connected.",
+                "response": (
+                    "Gmail is not fully configured yet. "
+                    f"{exc}"
+                ),
+                "requires_confirmation": False,
+                "type": "error",
+            }
+
+        except PermissionError as exc:
+            print(f"Tool permission failed: {tool_name}", exc)
+
+            return {
+                "response": (
+                    "Google did not allow that action. "
+                    "Delete token.json, reconnect your Google account, "
+                    "and approve the requested Gmail permissions."
+                ),
+                "requires_confirmation": False,
+                "type": "error",
+            }
+
+        except TimeoutError:
+            return {
+                "response": (
+                    f"The {tool_name} request took too long. "
+                    "ALFRED is still running, so you can try the request again."
+                ),
+                "requires_confirmation": False,
+                "type": "error",
+            }
+
+        except ValueError as exc:
+            print(f"Invalid tool request: {tool_name}", exc)
+
+            return {
+                "response": str(exc),
+                "requires_confirmation": False,
+                "type": "error",
+            }
+
+        except Exception as exc:
+            print(
+                f"Tool failed: {tool_name}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            error_text = str(exc).strip()
+
+            return {
+                "response": (
+                    f"I understood the request, but the {tool_name} tool "
+                    "could not complete it. "
+                    + (
+                        f"Details: {error_text}"
+                        if error_text
+                        else "Check that the connected service is available."
+                    )
+                ),
                 "requires_confirmation": False,
                 "type": "error",
             }

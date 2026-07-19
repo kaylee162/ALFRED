@@ -235,6 +235,337 @@ ALFRED_TOOLS = [
             "additionalProperties": False,
         },
     },
+        # Gmail tools
+    {
+        "type": "function",
+        "name": "list_unread_emails",
+        "description": (
+            "List unread emails in the user's Gmail inbox. "
+            "Use when the user asks to see, show, check, or list unread emails."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of unread emails to return. Default is 10.",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "list_recent_emails",
+        "description": (
+            "List recent emails in the user's Gmail inbox. "
+            "Use for requests such as show my latest emails or what is new in my inbox."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of recent emails to return. Default is 10.",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "search_emails",
+        "description": (
+            "Search the user's Gmail messages using Gmail search syntax. "
+            "Use for requests involving a sender, subject, keyword, date range, "
+            "attachments, read status, or mailbox label."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "A Gmail search query, such as "
+                        "'from:john@example.com', "
+                        "'subject:invoice', "
+                        "'newer_than:7d', "
+                        "'has:attachment', or "
+                        "'in:inbox is:unread'."
+                    ),
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of emails to return. Default is 10.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_email",
+        "description": (
+            "Read the complete contents of a specific Gmail message. "
+            "Use when a message ID is already available from an earlier email result."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The Gmail message ID of the email to read.",
+                },
+                "mark_as_read": {
+                    "type": "boolean",
+                    "description": "Whether to mark the message as read. Default is true.",
+                },
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_latest_email",
+        "description": (
+            "Read the newest email matching a Gmail search query. "
+            "Use for requests such as read my newest email, read my latest unread email, "
+            "or read the latest email from someone."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Gmail search query used to choose the newest matching email. "
+                        "Use 'in:inbox' when no filter was requested."
+                    ),
+                },
+                "mark_as_read": {
+                    "type": "boolean",
+                    "description": "Whether to mark the email as read. Default is true.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "summarize_email",
+        "description": (
+            "Read and summarize one specific email. "
+            "Use when a Gmail message ID is already known."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The Gmail message ID of the email to summarize.",
+                }
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "summarize_emails",
+        "description": (
+            "Create a concise briefing from several Gmail messages. "
+            "Use for summarize my inbox, summarize unread emails, "
+            "what needs my attention, or summarize emails from a sender."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Gmail search query selecting emails to summarize. "
+                        "Use 'in:inbox is:unread' for a general unread inbox summary."
+                    ),
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of emails to summarize. Default is 10.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "create_email_draft",
+        "description": (
+            "Create a Gmail draft for the user to review. "
+            "Use this for write, compose, draft, or prepare an email. "
+            "Do not send the email."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address.",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Complete email body.",
+                },
+                "cc": {
+                    "type": ["string", "null"],
+                    "description": "Optional comma-separated CC recipients.",
+                },
+                "bcc": {
+                    "type": ["string", "null"],
+                    "description": "Optional comma-separated BCC recipients.",
+                },
+            },
+            "required": ["to", "subject", "body"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "create_reply_draft",
+        "description": (
+            "Create a draft reply to an existing Gmail message without sending it. "
+            "Use when the user asks to write, draft, or prepare a reply."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "Gmail message ID being replied to.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Complete reply body.",
+                },
+            },
+            "required": ["message_id", "body"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "send_email",
+        "description": (
+            "Send an email immediately. "
+            "Only use when the user explicitly says to send the email now. "
+            "For write, compose, prepare, or draft requests, use create_email_draft instead."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address.",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Complete email body.",
+                },
+                "cc": {
+                    "type": ["string", "null"],
+                    "description": "Optional comma-separated CC recipients.",
+                },
+                "bcc": {
+                    "type": ["string", "null"],
+                    "description": "Optional comma-separated BCC recipients.",
+                },
+            },
+            "required": ["to", "subject", "body"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "send_email_draft",
+        "description": (
+            "Send an existing Gmail draft. "
+            "Only use after the user explicitly confirms that the saved draft should be sent."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "string",
+                    "description": "The Gmail draft ID to send.",
+                }
+            },
+            "required": ["draft_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "mark_email_read",
+        "description": "Mark a specific Gmail message as read.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The Gmail message ID.",
+                }
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "mark_email_unread",
+        "description": "Mark a specific Gmail message as unread.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The Gmail message ID.",
+                }
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "archive_email",
+        "description": (
+            "Archive a specific Gmail message by removing it from the inbox. "
+            "This does not delete the email."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The Gmail message ID.",
+                }
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -318,7 +649,5 @@ ALFRED_TOOLS = [
                 "required": []
             },
         },
-    },
-
-    
+    }, 
 ]

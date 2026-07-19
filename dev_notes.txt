@@ -10,9 +10,6 @@ file manager can find some things, but need to improve UI. i.e. show downloads f
 folder navigation needs improving
     also prob gonna need to fix the UI
 
-better error handling for timeouts
-better error handling for bad requests. if alfred cant do something, dont quit and display a blank screen. 
-
 specific:
 weekly weather pulls a weird order. it should always have today at the first block, then the next 6 days after. 
 schedule Dentist on August 17 at 7pm doesnt do the right time, probably a different timezone issue. 
@@ -67,9 +64,13 @@ cd app/backend
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn main:app --reload
 
+ctrl + fn + b to stop
+
 run frontend
 cd app/frontend
 npm run dev
+
+ctrl + C to stop
 
 ---
 AI Model

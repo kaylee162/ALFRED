@@ -15,7 +15,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CREDENTIALS_PATH = BASE_DIR / "credentials.json"
 TOKEN_PATH = BASE_DIR / "token.json"
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
 TIMEZONE = "America/New_York"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
@@ -56,27 +61,57 @@ def get_calendar_service():
     creds = None
 
     if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(
+                str(TOKEN_PATH),
+                SCOPES,
+            )
+        except (ValueError, OSError) as exc:
+            print(f"Could not load token.json: {exc}")
+            creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                print(f"Could not refresh Google token: {exc}")
+                creds = None
+
+        if not creds:
             if not CREDENTIALS_PATH.exists():
                 raise FileNotFoundError(
-                    "Missing credentials.json. Download it from Google Cloud Console and place it in backend/."
+                    "Missing credentials.json. Place it in the backend folder."
                 )
 
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_PATH),
                 SCOPES,
             )
-            creds = flow.run_local_server(port=0)
 
-        TOKEN_PATH.write_text(creds.to_json())
+            creds = flow.run_local_server(
+                host="localhost",
+                port=0,
+                open_browser=True,
+                authorization_prompt_message=(
+                    "Open this URL in your browser to authorize ALFRED:\n{url}"
+                ),
+                success_message=(
+                    "ALFRED has been authorized. You can close this window."
+                ),
+            )
 
-    return build("calendar", "v3", credentials=creds)
+        TOKEN_PATH.write_text(
+            creds.to_json(),
+            encoding="utf-8",
+        )
 
+    return build(
+        "calendar",
+        "v3",
+        credentials=creds,
+        cache_discovery=False,
+    )
 
 def list_upcoming_events(days: int = 7, max_results: int = 20) -> list[dict[str, Any]]:
     service = get_calendar_service()
