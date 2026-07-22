@@ -14,6 +14,22 @@ from gmail_tools.gmail_service import (
 )
 
 
+def _ollama_text(
+    prompt: str,
+    *,
+    timeout: int = 45,
+    num_predict: int = 400,
+) -> str:
+    """Run Ollama and return only the assistant text."""
+    message = chat_with_ollama(
+        prompt,
+        timeout=timeout,
+        num_predict=num_predict,
+        temperature=0.2,
+    )
+    return str(message.get("content") or "").strip()
+
+
 def _truncate(
     value: str,
     limit: int = 5000,
@@ -94,61 +110,37 @@ def _format_email_list(
 def summarize_email(
     message_id: str,
 ) -> dict[str, Any]:
-    """
-    Read one email and ask Ollama for a concise, useful summary.
-    """
+    """Read one email and ask Ollama for a concise, useful summary."""
     email = get_email(message_id)
 
-    formatted_emails = "\n\n--- EMAIL ---\n\n".join(
-        _format_email_for_ai(
-            email,
-            include_body=False,
-        )
-        for email in emails
+    formatted_email = _format_email_for_ai(
+        email,
+        include_body=True,
     )
 
     prompt = f"""
 You are ALFRED, a helpful personal desktop assistant.
 
-Create a concise inbox briefing from the emails below.
+Summarize the email below.
 
-Use this exact plain-text format:
+Include:
+- A concise overview
+- Any requested action
+- Any visible deadline, meeting, payment, or important date
+- Whether a reply appears necessary
 
-Inbox Briefing
+Do not invent details. Keep the response under 180 words.
 
-Overview:
-- One or more short overview items.
-
-Important/Missing Actions:
-- Every important action the user should take.
-- Write "No important actions found." if there are none.
-
-Visible Deadlines/Meetings/Payments:
-- List visible dates, deadlines, meetings, reservations, or payments.
-- Write "No visible deadlines, meetings, or payments." if there are none.
-
-Replies Needed:
-- List emails that appear to need a reply and explain why.
-- Write "No replies appear necessary." if there are none.
-
-FYI Section:
-- List informational messages that require no action.
-
-Rules:
-- Use only the headings shown above.
-- Put each item on a line beginning with "- ".
-- Do not use Markdown asterisks.
-- Do not expose Gmail message IDs.
-- Do not invent details.
-- Keep each item concise.
-- Ignore signatures and promotional filler.
-
-EMAILS:
-{formatted_emails}
+EMAIL:
+{formatted_email}
 """.strip()
 
     try:
-        summary = chat_with_ollama(prompt).strip()
+        summary = _ollama_text(
+            prompt,
+            timeout=45,
+            num_predict=300,
+        )
     except Exception:
         summary = (
             f"This email is from {email.get('from') or 'an unknown sender'} "
@@ -162,17 +154,15 @@ EMAILS:
         "summary": summary,
     }
 
-
 def summarize_emails(
-    query: str = "in:inbox is:unread",
-    max_results: int = 10,
+    query: str = "in:inbox",
+    max_results: int = 5,
 ) -> dict[str, Any]:
     """
-    Create a concise inbox briefing.
+    Create a fast email briefing using Gmail metadata and snippets.
 
-    This intentionally uses message metadata and snippets instead of
-    downloading every complete email body. That keeps Gmail summaries fast
-    enough for the frontend request timeout.
+    Full message bodies are deliberately not downloaded here. Snippets are
+    enough for a multi-email overview and keep the Ollama prompt small.
     """
     max_results = max(1, min(max_results, 10))
 
@@ -202,40 +192,49 @@ def summarize_emails(
     prompt = f"""
 You are ALFRED, a helpful personal desktop assistant.
 
-Create a concise inbox briefing from the email previews below.
+Summarize the following {len(emails)} emails using only the information
+provided.
 
-Include:
-- A one-sentence overview.
-- Important or urgent messages first.
-- Any visible deadlines, dates, meetings, payments, or requested actions.
-- Which emails probably need a reply.
-- A brief FYI section for messages that appear informational.
+Requirements:
+- Begin with a brief overview.
+- Give each email one concise bullet.
+- Include the sender and subject.
+- Mention visible deadlines, meetings, payments, or requested actions.
+- State which messages appear to need a reply.
+- Do not invent details that are not present.
+- Keep the entire response under 300 words.
 
-Do not invent details that are not present in the previews.
-Do not expose Gmail message IDs.
-Keep the response concise and easy to scan.
-
-EMAIL PREVIEWS:
+EMAILS:
 {formatted_emails}
 """.strip()
 
     try:
-        summary = chat_with_ollama(prompt).strip()
+        summary = _ollama_text(
+            prompt,
+            timeout=45,
+            num_predict=400,
+        )
     except Exception as exc:
-        print("Email summarization failed:", exc)
-
-        lines = [
-            f"Absolutely, I found {len(emails)} matching emails."
+        summary_lines = [
+            f"I found {len(emails)} recent email"
+            f"{'s' if len(emails) != 1 else ''}:"
         ]
 
         for email in emails:
-            lines.append(
-                f"- {email.get('subject') or '(No subject)'} "
-                f"from {email.get('from') or 'Unknown sender'}: "
-                f"{email.get('snippet') or 'No preview available.'}"
+            subject = email.get("subject") or "(No subject)"
+            sender = email.get("from") or "Unknown sender"
+            snippet = email.get("snippet") or "No preview available."
+
+            summary_lines.append(
+                f"- {subject} from {sender}: {snippet}"
             )
 
-        summary = "\n".join(lines)
+        summary = "\n".join(summary_lines)
+
+        print(
+            "[GMAIL SUMMARY] Ollama summarization failed; "
+            f"using fallback: {type(exc).__name__}: {exc}"
+        )
 
     return {
         "response": summary,

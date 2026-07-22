@@ -1577,12 +1577,12 @@ function App() {
     setEventOptions(null);
 
     const controller = new AbortController();
-    const REQUEST_TIMEOUT_MS = 90_000;
 
-    const timeoutId = window.setTimeout(
-      () => controller.abort(),
-      REQUEST_TIMEOUT_MS
-    );
+    const COMMAND_TIMEOUT_MS = 65_000;
+
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, COMMAND_TIMEOUT_MS);
 
     try {
       const res = await fetch(`${API_BASE}/command`, {
@@ -2174,7 +2174,7 @@ function App() {
            <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.6.2
+              Adaptive Learning Framework for Responsive Executive Decisions V.7
             </p>
           </div>
 

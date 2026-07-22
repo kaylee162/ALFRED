@@ -1,14 +1,24 @@
 from datetime import date, timedelta
+from functools import lru_cache
 import requests
 import certifi
+import time
+import logging
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+LOGGER = logging.getLogger(__name__)
+_SESSION = requests.Session()
+_FORECAST_CACHE: dict[tuple[str, int], tuple[float, dict]] = {}
+FORECAST_CACHE_SECONDS = 300
 
 DEFAULT_LOCATION = "Atlanta"
 
-
+@lru_cache(maxsize=64)
 def geocode_location(location: str = DEFAULT_LOCATION) -> dict:
+    location = location.strip() or DEFAULT_LOCATION
+    started = time.perf_counter()
+
     params = {
         "name": location,
         "count": 1,
@@ -16,20 +26,30 @@ def geocode_location(location: str = DEFAULT_LOCATION) -> dict:
         "format": "json",
     }
 
-    res = requests.get(
+    res = _SESSION.get(
         GEOCODE_URL,
         params=params,
-        timeout=10,
+        timeout=(3, 7),
         verify=certifi.where(),
     )
     res.raise_for_status()
+
+    LOGGER.info(
+        "WEATHER GEOCODE TIMING: %.3fs for %s",
+        time.perf_counter() - started,
+        location,
+    )
+
     data = res.json()
 
     results = data.get("results", [])
     if not results:
-        raise ValueError(f"Could not find weather location: {location}")
+        raise ValueError(
+            f"Could not find weather location: {location}"
+        )
 
     place = results[0]
+
     return {
         "name": place.get("name"),
         "state": place.get("admin1"),
@@ -39,36 +59,75 @@ def geocode_location(location: str = DEFAULT_LOCATION) -> dict:
         "timezone": place.get("timezone", "auto"),
     }
 
+def get_weather_forecast(
+    location: str = DEFAULT_LOCATION,
+    days: int = 7,
+) -> dict:
+    normalized_location = location.strip() or DEFAULT_LOCATION
+    cache_key = (normalized_location.casefold(), days)
+    now = time.monotonic()
 
-def get_weather_forecast(location: str = DEFAULT_LOCATION, days: int = 7) -> dict:
-    place = geocode_location(location)
+    cached = _FORECAST_CACHE.get(cache_key)
+
+    if cached:
+        cached_at, cached_data = cached
+
+        if now - cached_at < FORECAST_CACHE_SECONDS:
+            LOGGER.info(
+                "WEATHER CACHE HIT: %s, %s days",
+                normalized_location,
+                days,
+            )
+            return cached_data
+
+    place = geocode_location(normalized_location)
 
     params = {
         "latitude": place["latitude"],
         "longitude": place["longitude"],
         "timezone": place["timezone"],
         "forecast_days": days,
-        "current": "temperature_2m,relative_humidity_2m,precipitation,rain,weather_code",
-        "hourly": "temperature_2m,relative_humidity_2m,precipitation_probability,rain",
-        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
+        "current": (
+            "temperature_2m,"
+            "relative_humidity_2m,"
+            "precipitation,"
+            "rain,"
+            "weather_code"
+        ),
+        "daily": (
+            "temperature_2m_max,"
+            "temperature_2m_min,"
+            "precipitation_probability_max,"
+            "weather_code"
+        ),
         "temperature_unit": "fahrenheit",
-        "wind_speed_unit": "mph",
         "precipitation_unit": "inch",
     }
 
-    res = requests.get(
+    started = time.perf_counter()
+
+    res = _SESSION.get(
         FORECAST_URL,
         params=params,
-        timeout=10,
+        timeout=(3, 7),
         verify=certifi.where(),
     )
     res.raise_for_status()
 
-    return {
+    result = {
         "location": place,
         "weather": res.json(),
     }
 
+    _FORECAST_CACHE[cache_key] = (now, result)
+
+    LOGGER.info(
+        "WEATHER FORECAST TIMING: %.3fs for %s",
+        time.perf_counter() - started,
+        normalized_location,
+    )
+
+    return result
 
 def summarize_today(location: str = DEFAULT_LOCATION) -> str:
     data = get_weather_forecast(location, days=1)
