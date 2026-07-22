@@ -1,4 +1,4 @@
-import json
+import logging
 
 from collections import Counter
 from datetime import datetime
@@ -57,14 +57,16 @@ from gmail_tools.gmail_service import (
     send_email as gmail_send_email,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 def _format_event(event: dict) -> str:
     title = event.get("title", "Untitled")
     start = event.get("start", "Unknown time")
-    location = event.get("location")
+    location = (arguments.get("location") or "").strip()
 
-    if location:
-        return f"- {title} at {start} — {location}"
-
+    if not location:
+        location = "Atlanta"
+        
     return f"- {title} at {start}"
 
 
@@ -188,14 +190,6 @@ def _summarize_weather(tool_name: str, location: str) -> str:
         return f"Absolutely, here's tomorrow's rain chance for {location}."
 
     return f"Absolutely, here's the weather update for {location}."
-
-def _with_summary(summary: str, body: str) -> str:
-    body = body.strip()
-
-    if not body:
-        return summary
-
-    return f"{summary}\n\n{body}"
 
 def execute_tool_call(tool_name: str, arguments: dict | None = None):
     arguments = arguments or {}
@@ -471,12 +465,12 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         }
 
     if tool_name == "summarize_emails":
+        query = arguments.get("query", "in:inbox")
+        max_results = arguments.get("max_results", 5)
+
         result = summarize_emails(
-            query=arguments.get(
-                "query",
-                "in:inbox is:unread",
-            ),
-            max_results=arguments.get("max_results", 10),
+            query=query,
+            max_results=max_results,
         )
 
         return {
@@ -666,106 +660,79 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
             "requires_confirmation": False,
         }
     
-    if tool_name == "get_weather_today":
-        location = arguments.get("location", "Atlanta")
+    # Weather tool
+    if tool_name == "weather":
+        location = str(arguments.get("location") or "Atlanta").strip()
+        period = str(arguments.get("period") or "today").strip().lower()
+        detail = str(arguments.get("detail") or "summary").strip().lower()
+
+        valid_periods = {"today", "tomorrow", "week"}
+        valid_details = {"summary", "high", "humidity", "rain_chance"}
+
+        if period not in valid_periods:
+            period = "today"
+
+        if detail not in valid_details:
+            detail = "summary"
 
         try:
-            response = summarize_today(location)
-        except Exception as e:
-            response = f"I couldn't fetch the weather right now. Error: {e}"
+            if detail == "high":
+                response = get_high_today(location)
+                summary_tool_name = "get_high_today"
+
+            elif detail == "humidity":
+                response = get_humidity_today(location)
+                summary_tool_name = "get_humidity_today"
+
+            elif detail == "rain_chance":
+                if period != "tomorrow":
+                    return {
+                        "response": (
+                            "Right now, ALFRED supports rain chance for "
+                            "tomorrow. Try asking for tomorrow's rain chance."
+                        ),
+                        "requires_confirmation": False,
+                        "type": "weather",
+                    }
+
+                response = get_rain_chance_tomorrow(location)
+                summary_tool_name = "get_rain_chance_tomorrow"
+
+            elif period == "tomorrow":
+                response = summarize_tomorrow(location)
+                summary_tool_name = "get_weather_tomorrow"
+
+            elif period == "week":
+                response = summarize_week(location)
+                summary_tool_name = "get_weather_week"
+
+            else:
+                response = summarize_today(location)
+                summary_tool_name = "get_weather_today"
+
+        except Exception as exc:
+            LOGGER.exception("Weather request failed for %s", location)
+            return {
+                "response": (
+                    "I couldn't fetch the weather right now. "
+                    f"Error: {exc}"
+                ),
+                "requires_confirmation": False,
+                "type": "weather",
+            }
 
         return {
             "response": _with_summary(
-                _summarize_weather(tool_name, location),
+                _summarize_weather(summary_tool_name, location),
                 response,
             ),
             "requires_confirmation": False,
             "type": "weather",
-        }
-
-    if tool_name == "get_weather_tomorrow":
-        location = arguments.get("location", "Atlanta")
-
-        try:
-            response = summarize_tomorrow(location)
-        except Exception as e:
-            response = f"I couldn't fetch tomorrow's weather right now. Error: {e}"
-
-        return {
-            "response": _with_summary(
-                _summarize_weather(tool_name, location),
-                response,
-            ),
-            "requires_confirmation": False,
-            "type": "weather",
-        }
-
-    if tool_name == "get_weather_week":
-        location = arguments.get("location", "Atlanta")
-
-        try:
-            response = summarize_week(location)
-        except Exception as e:
-            response = f"I couldn't fetch this week's weather right now. Error: {e}"
-
-        return {
-            "response": _with_summary(
-                _summarize_weather(tool_name, location),
-                response,
-            ),
-            "requires_confirmation": False,
-            "type": "weather",
-        }
-
-    if tool_name == "get_high_today":
-        location = arguments.get("location", "Atlanta")
-
-        try:
-            response = get_high_today(location)
-        except Exception as e:
-            response = f"I couldn't fetch today's high temperature right now. Error: {e}"
-
-        return {
-            "response": _with_summary(
-                _summarize_weather(tool_name, location),
-                response,
-            ),
-            "requires_confirmation": False,
-            "type": "weather",
-        }
-
-    if tool_name == "get_humidity_today":
-        location = arguments.get("location", "Atlanta")
-
-        try:
-            response = get_humidity_today(location)
-        except Exception as e:
-            response = f"I couldn't fetch today's humidity right now. Error: {e}"
-
-        return {
-            "response": _with_summary(
-                _summarize_weather(tool_name, location),
-                response,
-            ),
-            "requires_confirmation": False,
-            "type": "weather",
-        }
-
-    if tool_name == "get_rain_chance_tomorrow":
-        location = arguments.get("location", "Atlanta")
-
-        try:
-            response = get_rain_chance_tomorrow(location)
-        except Exception as e:
-            response = f"I couldn't fetch tomorrow's rain chance right now. Error: {e}"
-
-        return {
-            "response": _with_summary(
-                _summarize_weather(tool_name, location),
-                response,
-            ),
-            "requires_confirmation": False,
-            "type": "weather",
+            "weather": {
+                "location": location,
+                "period": period,
+                "detail": detail,
+            },
         }
 
     return {
