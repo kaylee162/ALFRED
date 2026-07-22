@@ -155,3 +155,16 @@ It can work with:
 .csv
 .html
 .css
+
+
+
+FUTURE
+Strava
+support commands like:
+
+“What workouts did I do this week?”
+“How many miles have I run this month?”
+“Compare this week with last week.”
+“What was my longest bike ride?”
+“Plan three workouts next week around my calendar.”
+“Have I been increasing my running mileage too quickly?”

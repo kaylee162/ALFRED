@@ -1328,11 +1328,23 @@ function ProjectExplorer({
   data,
   onFolderClick,
   onOpenProject,
+  onOpenInVSCode,
 }: {
   data: ProjectExplorerData;
   onFolderClick: (path: string | null) => void;
   onOpenProject: (path: string) => void;
+  onOpenInVSCode: (path: string) => void;
 }) {
+  const currentPath = (data.current_path || data.root || "")
+    .replace(/\//g, "\\")
+    .toLowerCase();
+
+  const isProjectContext =
+    currentPath === "c:\\users\\alpha\\src" ||
+    currentPath.startsWith("c:\\users\\alpha\\src\\") ||
+    currentPath === "c:\\users\\alpha\\source" ||
+    currentPath.startsWith("c:\\users\\alpha\\source\\");
+
   return (
     <div className="project-explorer-card">
       <div className="project-explorer-header">
@@ -1367,21 +1379,40 @@ function ProjectExplorer({
                   if (item.type === "folder") onFolderClick(item.path);
                 }}
                 disabled={item.type !== "folder"}
+                title={
+                  item.type === "folder"
+                    ? "Browse this folder"
+                    : item.name
+                }
               >
-                <FolderOpen size={16} />
+                {item.type === "folder" ? (
+                  <FolderOpen size={16} />
+                ) : (
+                  <FileText size={16} />
+                )}
                 <span>{item.name}</span>
                 <small>{item.type}</small>
               </button>
 
-              {item.type === "folder" && (
+              <div className="project-file-actions">
                 <button
                   className="project-open-button"
                   type="button"
                   onClick={() => onOpenProject(item.path)}
                 >
-                  Open in VS Code
+                  Open
                 </button>
-              )}
+
+                {isProjectContext && item.type === "folder" && (
+                  <button
+                    className="project-open-button project-vscode-button"
+                    type="button"
+                    onClick={() => onOpenInVSCode(item.path)}
+                  >
+                    Open in VS Code
+                  </button>
+                )}
+              </div>
             </div>
           ))
         )}
@@ -1410,6 +1441,68 @@ function normalizeProjectItems(items: any[]): ProjectItem[] {
       can_open: item.can_open ?? true,
     };
   });
+}
+
+function getExplorerData(data: any): ProjectExplorerData | null {
+  const supportedTypes = new Set([
+    "project_list",
+    "projects",
+    "project_explorer",
+    "folder",
+    "recent_downloads",
+    "file_search",
+  ]);
+
+  if (!supportedTypes.has(data?.type)) return null;
+
+  const nestedPayload =
+    data.project_data ||
+    (data.projects && !Array.isArray(data.projects) ? data.projects : null) ||
+    data.folder ||
+    data.downloads ||
+    data.results ||
+    null;
+
+  const source =
+    nestedPayload && typeof nestedPayload === "object"
+      ? nestedPayload
+      : data;
+
+  const rawItems =
+    source.items ||
+    (Array.isArray(data.projects) ? data.projects : []) ||
+    [];
+
+  const fallbackPath =
+    data.type === "folder" || data.type === "recent_downloads"
+      ? "C:\\Users\\alpha\\Downloads"
+      : "C:\\Users\\alpha\\src";
+
+  return {
+    success: source.success ?? data.success ?? true,
+    message:
+      source.message ||
+      data.message ||
+      data.response ||
+      "Explorer loaded.",
+    root:
+      source.root ||
+      data.root ||
+      source.current_path ||
+      data.current_path ||
+      fallbackPath,
+    current_path:
+      source.current_path ||
+      data.current_path ||
+      source.root ||
+      data.root ||
+      fallbackPath,
+    parent_path:
+      source.parent_path ??
+      data.parent_path ??
+      null,
+    items: normalizeProjectItems(rawItems),
+  };
 }
 
 function pluralize(
@@ -1627,40 +1720,17 @@ function App() {
         setPendingEndTime(pending.draft.end_time || "");
       }
 
-      if (data.type === "project_list" || data.type === "projects") {
-        const rawItems = data.items || data.projects || [];
+      const explorerData = getExplorerData(data);
 
-        setProjectExplorer({
-          success: data.success ?? true,
-          message: data.message || data.response || "Showing projects.",
-          root: data.root || data.current_path || "C:\\Users\\alpha\\src",
-          current_path: data.current_path || data.root || "C:\\Users\\alpha\\src",
-          parent_path: data.parent_path || null,
-          items: normalizeProjectItems(rawItems),
-        });
+      if (explorerData) {
+        setProjectExplorer(explorerData);
+        setCalendarCardResponse("");
+        setEmailResponse(null);
 
         const overview =
-          data.message ||
-          "Absolutely, I found your projects and loaded them below.";
-
-        setResponse(
-          overview ||
-            visibleResponse ||
-            data.message ||
-            data.response ||
-            "Project explorer loaded."
-        );
-        setShouldTypeResponse(true);
-      } else if (data.type === "project_explorer" && data.project_data) {
-        setProjectExplorer({
-          ...data.project_data,
-          items: normalizeProjectItems(data.project_data.items || []),
-        });
-
-        const overview =
-          data.message ||
           visibleResponse ||
-          "Absolutely, I loaded that project folder for you.";
+          explorerData.message ||
+          "Absolutely, I loaded those files for you.";
 
         setResponse(overview);
         setShouldTypeResponse(true);
@@ -1800,18 +1870,37 @@ function App() {
   }
 
   async function loadProjectFolder(path?: string | null) {
-    const res = await fetch(`${API_BASE}/projects/list`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ path }),
-    });
+    try {
+      const res = await fetch(`${API_BASE}/projects/list`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path }),
+      });
 
-    const data = await res.json();
-    setProjectExplorer(data);
-    setShouldTypeResponse(true);
-    setResponse(data.message || "Project folder loaded.");
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || data.message || "Could not load project folder.");
+      }
+
+      const explorerData: ProjectExplorerData = {
+        success: data.success ?? true,
+        message: data.message || "Project folder loaded.",
+        root: data.root || data.current_path || "C:\\Users\\alpha\\src",
+        current_path: data.current_path || data.root || "C:\\Users\\alpha\\src",
+        parent_path: data.parent_path ?? null,
+        items: normalizeProjectItems(data.items || []),
+      };
+
+      setProjectExplorer(explorerData);
+      setShouldTypeResponse(true);
+      setResponse(explorerData.message);
+    } catch (error: any) {
+      setShouldTypeResponse(true);
+      setResponse(error?.message || "Could not load that project folder.");
+    }
   }
 
   async function openProject(path: string) {
@@ -1824,8 +1913,44 @@ function App() {
     });
 
     const data = await res.json();
+
+    if (!res.ok || data.success === false) {
+      setShouldTypeResponse(true);
+      setResponse(data.message || data.detail || "Could not open that item.");
+      return;
+    }
+
+    // Once Windows has opened the folder or shown the app chooser,
+    // close ALFRED's explorer view and return to the normal response.
+    setProjectExplorer(null);
     setShouldTypeResponse(true);
-    setResponse(data.message || "Project opened.");
+    setResponse(data.message || "Item opened.");
+  }
+
+  async function openProjectInVSCode(path: string) {
+    const res = await fetch(`${API_BASE}/projects/open-vscode`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || data.success === false) {
+      setShouldTypeResponse(true);
+      setResponse(
+        data.message ||
+          data.detail ||
+          "Could not open that project in VS Code."
+      );
+      return;
+    }
+
+    setProjectExplorer(null);
+    setShouldTypeResponse(true);
+    setResponse(data.message || "Project opened in VS Code.");
   }
 
   async function loadUpcomingEvents() {
@@ -2174,7 +2299,7 @@ function App() {
            <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.7
+              Adaptive Learning Framework for Responsive Executive Decisions V.7.1
             </p>
           </div>
 
@@ -2232,6 +2357,7 @@ function App() {
                     data={projectExplorer}
                     onFolderClick={loadProjectFolder}
                     onOpenProject={openProject}
+                    onOpenInVSCode={openProjectInVSCode}
                   />
                 )}
               </div>

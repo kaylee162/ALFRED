@@ -230,6 +230,75 @@ def _call_details(call: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     return name, arguments if isinstance(arguments, dict) else {}
 
 
+def _clean_target(text: str) -> str:
+    value = text.strip().strip('"').strip("'").strip()
+    value = re.sub(r"\s+(?:in\s+)?(?:vs\s*code|vscode)$", "", value, flags=re.IGNORECASE)
+    return value.strip(" .")
+
+
+def _fallback_tool_call(route: str, command: str) -> tuple[str, dict[str, Any]] | None:
+    """Recover obvious local tool requests when Ollama returns no tool call."""
+    text = command.strip()
+    lowered = text.lower()
+
+    if route in {"projects", "multi"}:
+        if re.search(r"\b(?:show|list|display|view)\b.*\bprojects?\b", lowered) or lowered in {
+            "my projects", "projects", "project explorer",
+        }:
+            return "list_projects", {}
+
+        open_match = re.search(
+            r"\b(?:open|launch|start)\s+(?:the\s+)?(?:project\s+)?(.+?)(?:\s+project)?(?:\s+in\s+(?:vs\s*code|vscode))?$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if open_match:
+            target = _clean_target(open_match.group(1))
+            if target and target.lower() not in {"project", "projects", "project explorer"}:
+                return "open_project_path", {"path": target}
+
+        folder_match = re.search(
+            r"\b(?:show|list|view|browse)\s+(?:the\s+)?(?:contents?\s+of\s+)?(?:project\s+)?(?:folder\s+)?(.+)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if folder_match and "project" in lowered:
+            target = _clean_target(folder_match.group(1))
+            target = re.sub(r"\bproject\s+folder\b", "", target, flags=re.IGNORECASE).strip()
+            return "list_project_folder", {"path": target or None}
+
+    if route in {"files", "multi"}:
+        if "recent download" in lowered or re.search(r"\bdownloads?\s+(?:from|in)\s+the\s+last\b", lowered):
+            days_match = re.search(r"\b(\d+)\s+days?\b", lowered)
+            return "recent_downloads", {
+                "days": int(days_match.group(1)) if days_match else 7,
+                "limit": 25,
+            }
+
+        read_match = re.search(r"\b(?:read|summarize|show\s+me\s+the\s+contents?\s+of)\s+(?:the\s+)?(?:file\s+)?(.+)$", text, re.IGNORECASE)
+        if read_match:
+            return "read_text_file", {"path": _clean_target(read_match.group(1))}
+
+        search_match = re.search(r"\b(?:find|search\s+for|look\s+for|locate)\s+(?:a\s+)?(?:file|folder)?\s*(?:named|called)?\s*(.+)$", text, re.IGNORECASE)
+        if search_match:
+            query = _clean_target(search_match.group(1))
+            if query:
+                return "search_files", {"query": query, "limit": 25}
+
+        open_match = re.search(r"\b(?:open|launch)\s+(?:the\s+)?(?:file|folder|path)?\s*(.+)$", text, re.IGNORECASE)
+        if open_match:
+            target = _clean_target(open_match.group(1))
+            if target:
+                return "open_path", {"path": target}
+
+        root_names = r"downloads?|documents?|desktop|src|source|projects?"
+        if re.search(rf"\b(?:show|list|browse|view)\b.*\b({root_names})\b", lowered) or re.fullmatch(root_names, lowered):
+            root_match = re.search(rf"\b({root_names})\b", lowered)
+            return "list_folder", {"path": root_match.group(1) if root_match else None}
+
+    return None
+
+
 def _result_text(result: Any) -> str:
     if isinstance(result, dict):
         value = result.get("response")
@@ -334,6 +403,17 @@ def handle_ai_command(command: str) -> dict[str, Any]:
             calls = _extract_calls(assistant)
 
             if not calls:
+                fallback_call = _fallback_tool_call(route, command) if not completed else None
+
+                if fallback_call:
+                    fallback_name, fallback_arguments = fallback_call
+                    LOGGER.info(
+                        "Ollama returned no tool call; using local fallback %s",
+                        fallback_name,
+                    )
+                    result = execute_tool_call(fallback_name, fallback_arguments)
+                    return _return_payload(_result_text(result), [result])
+
                 final_text = str(
                     assistant.get("content") or ""
                 ).strip()
@@ -531,6 +611,9 @@ def _candidate_routes(command: str) -> set[str]:
         "source code",
         "open in vscode",
         "vscode",
+        "launch project",
+        "open project",
+        "project folder",
     }
 
     file_terms = {
@@ -543,6 +626,9 @@ def _candidate_routes(command: str) -> set[str]:
         "desktop",
         "find a file",
         "open the file",
+        "recent downloads",
+        "read file",
+        "locate",
     }
 
     def contains_any(terms: set[str]) -> bool:
