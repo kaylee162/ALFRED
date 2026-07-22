@@ -62,12 +62,9 @@ LOGGER = logging.getLogger(__name__)
 def _format_event(event: dict) -> str:
     title = event.get("title", "Untitled")
     start = event.get("start", "Unknown time")
-    location = (arguments.get("location") or "").strip()
-
-    if not location:
-        location = "Atlanta"
-        
-    return f"- {title} at {start}"
+    location = str(event.get("location") or "").strip()
+    suffix = f" at {location}" if location else ""
+    return f"- {title} at {start}{suffix}"
 
 
 def _format_events(label: str, events: list[dict]) -> str:
@@ -224,14 +221,26 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         }
 
     if tool_name == "open_project_path":
-        result = open_project_path(arguments["path"])
+        path = arguments.get("path")
+        if not path:
+            return {
+                "response": "Tell me which project you want to open.",
+                "type": "project_open_error",
+                "requires_confirmation": False,
+            }
+        result = open_project_path(path)
+        summary = (
+            "Absolutely, I opened that project for you."
+            if result.get("success")
+            else "I couldn't open that project."
+        )
 
         return {
             "response": _with_summary(
-                "Absolutely, I opened that project for you.",
+                summary,
                 result.get("message", "Opening project."),
             ),
-            "type": "project_opened",
+            "type": "project_opened" if result.get("success") else "project_open_error",
             "result": result,
             "requires_confirmation": False,
         }
@@ -252,8 +261,15 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
 
     # File manager tools
     if tool_name == "search_files":
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return {
+                "response": "Tell me what file or folder to search for.",
+                "type": "file_search_error",
+                "requires_confirmation": False,
+            }
         result = search_files(
-            query=arguments["query"],
+            query=query,
             limit=arguments.get("limit", 25),
         )
         return {
@@ -289,7 +305,14 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         }
 
     if tool_name == "read_text_file":
-        result = read_text_file(arguments["path"])
+        path = arguments.get("path")
+        if not path:
+            return {
+                "response": "Tell me which text file you want me to read.",
+                "type": "file_read_error",
+                "requires_confirmation": False,
+            }
+        result = read_text_file(path)
 
         if not result.get("success"):
             return {
@@ -310,14 +333,26 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         }
 
     if tool_name == "open_path":
-        result = open_path(arguments["path"])
+        path = arguments.get("path")
+        if not path:
+            return {
+                "response": "Tell me which file or folder you want to open.",
+                "type": "path_open_error",
+                "requires_confirmation": False,
+            }
+        result = open_path(path)
+        summary = (
+            "Absolutely, I opened that path for you."
+            if result.get("success")
+            else "I couldn't open that path."
+        )
 
         return {
             "response": _with_summary(
-                "Absolutely, I opened that path for you.",
+                summary,
                 result.get("message", "Opening path."),
             ),
-            "type": "path_opened",
+            "type": "path_opened" if result.get("success") else "path_open_error",
             "result": result,
             "requires_confirmation": False,
         }

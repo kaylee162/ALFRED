@@ -16,8 +16,11 @@ from tools.file_manager import (
     recent_downloads,
     search_files,
 )
-from tools.project_launcher import list_project_folder, open_project_path
-
+from tools.project_launcher import (
+    open_project_path,
+    open_project_in_vscode,
+    list_project_folder,
+)
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
@@ -89,6 +92,9 @@ def projects_list(request: ProjectFolderRequest):
 def projects_open(request: OpenProjectRequest):
     return open_project_path(request.path)
 
+@app.post("/projects/open-vscode")
+def projects_open_vscode(request: OpenProjectRequest):
+    return open_project_in_vscode(request.path)
 
 @app.post("/files/search")
 def files_search(request: SearchFilesRequest):
