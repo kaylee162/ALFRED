@@ -4,16 +4,6 @@ from collections import Counter
 from datetime import datetime
 
 from calendar_tools.calendar_intent import handle_calendar_command
-from calendar_tools.calendar_service import (
-    create_calendar_event,
-    list_events_for_day,
-    list_upcoming_events,
-)
-
-from calendar_tools.planning_service import (
-    generate_daily_plan,
-    generate_weekly_summary,
-)
 
 from tools.project_launcher import (
     list_project_folder,
@@ -357,56 +347,36 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
             "requires_confirmation": False,
         }
 
-    # Calendar tools
+    # Calendar is a single structured boundary. The intent module owns all
+    # interpretation, searching, ambiguity, previews, and confirmation state.
     if tool_name == "calendar":
-        response = handle_calendar_command(arguments.get("command", ""))
+        command = str(arguments.get("command") or "").strip()
+        if not command:
+            return {
+                "response": "I need a calendar command before I can continue.",
+                "overview": "I need a calendar command before I can continue.",
+                "type": "calendar_error",
+                "requires_confirmation": False,
+            }
+        try:
+            result = handle_calendar_command(command)
+        except Exception:
+            LOGGER.exception("Calendar command failed: %s", command)
+            return {
+                "response": "I couldn't safely process that calendar request. No event was changed.",
+                "overview": "I couldn't safely process that calendar request. No event was changed.",
+                "type": "calendar_error",
+                "requires_confirmation": False,
+            }
+        if result is None:
+            return {
+                "response": "I couldn't determine which calendar action to take. No event was changed.",
+                "overview": "I couldn't determine which calendar action to take. No event was changed.",
+                "type": "calendar_error",
+                "requires_confirmation": False,
+            }
+        return result
 
-        return {
-            "response": response,
-            "requires_confirmation": False,
-        }
-
-    if tool_name == "create_calendar_event":
-        created = create_calendar_event(
-            title=arguments["title"],
-            start_time=arguments["start_datetime"],
-            end_time=arguments["end_datetime"],
-            location=arguments.get("location"),
-            description=arguments.get("description"),
-            reminder_minutes=arguments.get("reminder_minutes") or 10,
-        )
-
-        return {
-            "response": _with_summary(
-                f"Absolutely, I created {created.get('title', arguments['title'])}.",
-                f"Created event: {created.get('title', arguments['title'])}",
-            ),
-            "requires_confirmation": False,
-            "type": "calendar_event",
-            "event": created,
-        }
-
-    if tool_name == "get_calendar_day":
-        events = list_events_for_day(arguments["date"])
-        return {
-            "response": _format_events(arguments["date"], events),
-            "requires_confirmation": False,
-            "type": "calendar_events",
-            "events": events,
-        }
-
-    if tool_name == "get_upcoming_calendar_events":
-        events = list_upcoming_events(
-            days=arguments.get("days", 7),
-            max_results=arguments.get("max_results", 10),
-        )
-        return {
-            "response": _format_events("upcoming events", events),
-            "requires_confirmation": False,
-            "type": "calendar_events",
-            "events": events,
-        }
-    
     # Gmail tools
     if tool_name == "list_unread_emails":
         result = handle_list_unread_emails(

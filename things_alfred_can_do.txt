@@ -159,7 +159,7 @@ It can work with:
 
 
 FUTURE
-Strava
+Strava / Garmin
 support commands like:
 
 “What workouts did I do this week?”

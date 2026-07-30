@@ -118,9 +118,13 @@ def _calendar_tool_schema() -> dict[str, Any]:
         "function": {
             "name": "calendar",
             "description": (
-                "Handle any Google Calendar request expressed in natural "
-                "language, including showing events, creating events, updating "
-                "events, deleting events, relative dates, and multi-day events."
+                "Handle Google Calendar requests written in natural language, "
+                "including viewing, creating, finding, updating, rescheduling, "
+                "renaming, and deleting events. Always pass the user's complete "
+                "original calendar command unchanged. Do not guess event IDs, "
+                "rewrite dates or times, or perform the update yourself. "
+                "Calendar updates and deletions may require ALFRED to show "
+                "matching events and ask for confirmation before changes are saved."
             ),
             "parameters": {
                 "type": "object",
@@ -128,7 +132,9 @@ def _calendar_tool_schema() -> dict[str, Any]:
                     "command": {
                         "type": "string",
                         "description": (
-                            "The user's complete original calendar request."
+                            "The user's full original calendar request, copied "
+                            "exactly without summarizing, rewriting, or resolving "
+                            "dates and times."
                         ),
                     }
                 },
@@ -137,7 +143,6 @@ def _calendar_tool_schema() -> dict[str, Any]:
             },
         },
     }
-
 
 def _tools_for_route(route: str) -> list[dict[str, Any]]:
     wanted = TOOL_NAMES_BY_ROUTE.get(route, set())
@@ -555,7 +560,8 @@ def _compact_tool_result(
     }
 
     if tool_name == "calendar":
-        compact["events"] = result.get("events", [])[:10]
+        compact["calendar"] = result.get("calendar")
+        compact["requires_confirmation"] = result.get("requires_confirmation", False)
 
     if tool_name == "weather":
         compact["weather"] = result.get("weather")
@@ -579,6 +585,13 @@ def _candidate_routes(command: str) -> set[str]:
         "availability",
         "free tomorrow",
         "busy tomorrow",
+        "today",
+        "tomorrow",
+        "this week",
+        "rest of today",
+        "what's left",
+        "whats left",
+        "upcoming",
     }
 
     email_terms = {
@@ -634,7 +647,12 @@ def _candidate_routes(command: str) -> set[str]:
     def contains_any(terms: set[str]) -> bool:
         return any(term in text for term in terms)
 
-    if contains_any(calendar_terms):
+    calendar_action = re.search(
+        r"\b(move|reschedule|rename|delete|remove|cancel|edit|update|change)\b",
+        text,
+    )
+
+    if contains_any(calendar_terms) or calendar_action:
         routes.add("calendar")
 
     if contains_any(email_terms):

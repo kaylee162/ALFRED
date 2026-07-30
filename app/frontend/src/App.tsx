@@ -49,6 +49,45 @@ type CalendarEvent = {
   all_day?: boolean;
   location?: string | null;
   description?: string | null;
+  calendar_id?: string;
+
+  original_title?: string;
+  original_start?: string;
+  original_end?: string;
+};
+
+
+type CalendarView = {
+  presentation:
+    | "day"
+    | "week"
+    | "list"
+    | "created"
+    | "missing_fields"
+    | "update_options"
+    | "delete_options"
+    | "message";
+  timezone: string;
+  events: CalendarEvent[];
+  label?: string;
+  date?: string;
+  week_start?: string;
+  days?: { date: string; event_count: number; events: CalendarEvent[] }[];
+  summary?: {
+    busiest?: { date: string; event_count: number };
+    lightest?: { date: string; event_count: number };
+  };
+  action?: "update" | "delete";
+  missing_fields?: ("title" | "date" | "time")[];
+  draft?: PendingCalendarEvent["draft"] & { all_day?: boolean };
+};
+
+type CalendarCommandResponse = {
+  type: "calendar";
+  response: string;
+  overview?: string;
+  calendar: CalendarView;
+  requires_confirmation?: boolean;
 };
 
 type EventOptionsPayload = {
@@ -63,6 +102,7 @@ type EditableCalendarEvent = {
   end: string;
   location?: string | null;
   description?: string | null;
+  calendar_id?: string;
 };
 
 type PendingCalendarEvent = {
@@ -239,52 +279,54 @@ function normalizeEditableEvent(raw: any): EditableCalendarEvent | null {
     end,
     location: raw.location || null,
     description: raw.description || null,
+    calendar_id: raw.calendar_id || "primary",
   };
 }
 
-function getEventOptionsFromResponse(response: string): EventOptionsPayload | null {
-  const match = response.match(/__ALFRED_EVENT_OPTIONS__=(.+)$/m);
-  if (!match) return null;
-
-  try {
-    return JSON.parse(match[1]) as EventOptionsPayload;
-  } catch {
-    return null;
-  }
-}
-
-function getCreatedEventFromResponse(response: string): EditableCalendarEvent | null {
-  const match = response.match(/__ALFRED_CALENDAR_EVENT__=(.+)$/m);
-  if (!match) return null;
-
-  try {
-    return normalizeEditableEvent(JSON.parse(match[1]));
-  } catch {
-    return null;
-  }
-}
-
-function getPendingEventFromResponse(response: string): PendingCalendarEvent | null {
-  const match = response.match(/__ALFRED_PENDING_EVENT__=(.+)$/m);
-  if (!match) return null;
-
-  try {
-    return JSON.parse(match[1]) as PendingCalendarEvent;
-  } catch {
-    return null;
-  }
-}
-
 function getVisibleResponse(response: string) {
-  return response
-    .replace(/\n?__ALFRED_CALENDAR_EVENT__=.+$/m, "")
-    .replace(/\n?__ALFRED_PENDING_EVENT__=.+$/m, "")
-    .replace(/\n?__ALFRED_EVENT_OPTIONS__=.+$/m, "")
-    .trim();
+  return response.trim();
 }
 
 function isDateOnly(value?: string | null) {
   return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isFutureUpcomingEvent(event: CalendarEvent) {
+  // Keep all-day events for the current day.
+  if (event.all_day || isDateOnly(event.start)) {
+    const eventDate = parseLocalCalendarDate(event.start);
+    if (!eventDate) return false;
+
+    const today = new Date();
+
+    const eventDay = new Date(
+      eventDate.getFullYear(),
+      eventDate.getMonth(),
+      eventDate.getDate()
+    );
+
+    const todayDay = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+
+    return eventDay >= todayDay;
+  }
+
+  const now = new Date();
+
+  const end = event.end
+    ? parseLocalCalendarDate(event.end)
+    : null;
+
+  if (end) {
+    return end.getTime() > now.getTime();
+  }
+
+  const start = parseLocalCalendarDate(event.start);
+
+  return !!start && start.getTime() > now.getTime();
 }
 
 function parseLocalCalendarDate(value?: string | null) {
@@ -1299,6 +1341,63 @@ function ChatCalendarResponse({ response }: { response: string }) {
   );
 }
 
+function StructuredCalendarResponse({ data }: { data: CalendarView }) {
+  const [openDayIndex, setOpenDayIndex] = useState<number | null>(null);
+
+  if (data.presentation === "week") {
+    return (
+      <div className="chat-calendar-card">
+        <div className="chat-calendar-header centered">
+          <div><p className="panel-label">calendar response</p><h3>Week Overview</h3></div>
+          <CalendarDays size={18} />
+        </div>
+        <div className="chat-week-list">
+          {(data.days || []).map((day, index) => {
+            const parsedDate = parseLocalCalendarDate(day.date);
+            const isOpen = openDayIndex === index;
+            return (
+              <div className="chat-week-day" key={day.date}>
+                <div className="chat-week-row">
+                  <span className="chat-week-date">{parsedDate?.toLocaleDateString([], { month: "2-digit", day: "2-digit" })}</span>
+                  <strong className="chat-week-name">{parsedDate?.toLocaleDateString([], { weekday: "long" })}</strong>
+                  <button className={`chat-week-toggle ${isOpen ? "open" : ""}`} onClick={() => setOpenDayIndex(isOpen ? null : index)} type="button">
+                    <span>{day.event_count} {day.event_count === 1 ? "event" : "events"}</span><ChevronDown size={15} />
+                  </button>
+                </div>
+                {isOpen && <div className="chat-week-dropdown">
+                  {day.events.length === 0 ? <small>No events.</small> : day.events.map((event, eventIndex) => (
+                    <div className="chat-week-event-row" key={event.id || eventIndex}>
+                      <span>{formatUpcomingTime(event)}</span><strong>{event.title}</strong>{event.location && <small>{event.location}</small>}
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            );
+          })}
+        </div>
+        {data.summary && <div className="chat-week-summary"><span>Summary</span>
+          {data.summary.busiest && <small>Busiest day: {data.summary.busiest.date} with {data.summary.busiest.event_count} events.</small>}
+          {data.summary.lightest && <small>Lightest day: {data.summary.lightest.date} with {data.summary.lightest.event_count} events.</small>}
+        </div>}
+      </div>
+    );
+  }
+
+  if (["day", "list", "created"].includes(data.presentation)) {
+    return (
+      <div className="chat-calendar-card">
+        <div className="chat-calendar-header centered"><div><p className="panel-label">calendar response</p><h3>{data.label || (data.presentation === "created" ? "Event Created" : "Calendar")}</h3></div><CalendarDays size={18} /></div>
+        {data.events.length === 0 ? <div className="chat-calendar-empty"><span>No events</span><small>Your schedule is clear for this window.</small></div> :
+          <div className="chat-calendar-list">{data.events.map((event, index) => (
+            <div className="chat-calendar-event" key={event.id || index}><div className="chat-calendar-time">{formatUpcomingTime(event)}</div><div className="chat-calendar-details"><strong>{event.title}</strong><small>{formatUpcomingDate(event)}</small>{event.location && <small>{event.location}</small>}</div></div>
+          ))}</div>}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function ProcessingPanel({ steps }: { steps: string[] }) {
   return (
     <div className="processing-panel">
@@ -1610,6 +1709,7 @@ function App() {
   const [emailResponse, setEmailResponse] =
     useState<EmailResponseData | null>(null);
   const [calendarCardResponse, setCalendarCardResponse] = useState("");
+  const [calendarData, setCalendarData] = useState<CalendarView | null>(null);
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarStatus, setCalendarStatus] = useState("calendar not checked");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -1658,6 +1758,34 @@ function App() {
   async function submitCommand() {
     const trimmedCommand = command.trim();
     if (!trimmedCommand) return;
+
+    // Keep a pending calendar confirmation in the frontend. This lets the
+    // visible Yes/No buttons work immediately and also supports typing
+    // "yes" or "no" as the next message without asking Ollama to infer it.
+    const confirmationReply = trimmedCommand.toLowerCase();
+    if (eventOptions && eventOptions.events.length === 1) {
+      const pendingEventOption = eventOptions.events[0];
+      if (["yes", "y", "confirm", "confirmed"].includes(confirmationReply)) {
+        setCommand("");
+        if (eventOptions.action === "update") {
+          await handleOptionUpdateYes(pendingEventOption);
+        } else {
+          await handleOptionDelete(pendingEventOption);
+        }
+        return;
+      }
+
+      if (["no", "n", "cancel", "edit"].includes(confirmationReply)) {
+        setCommand("");
+        if (eventOptions.action === "update") {
+          handleOptionUpdateNo(pendingEventOption);
+        } else {
+          handleOptionDeleteNo();
+        }
+        return;
+      }
+    }
+
     setShowStartupChecks(false);
 
     setIsProcessing(true);
@@ -1666,6 +1794,7 @@ function App() {
     setDisplayedResponse("");
     setShouldTypeResponse(false);
     setCalendarCardResponse("");
+    setCalendarData(null);
     setEmailResponse(null);
     setEventOptions(null);
 
@@ -1704,26 +1833,49 @@ function App() {
       const responseText = data.response || "";
       const visibleResponse = getVisibleResponse(responseText);
 
-      const createdEvent = getCreatedEventFromResponse(responseText);
-      const pending = getPendingEventFromResponse(responseText);
-      const eventOptionsPayload = getEventOptionsFromResponse(responseText);
-
-      setEditableEvent(createdEvent);
-      setPendingEvent(pending);
-      setEventOptions(eventOptionsPayload);
+      setEditableEvent(null);
+      setPendingEvent(null);
+      setEventOptions(null);
       setIsEditingEvent(false);
-
-      if (pending) {
-        setPendingTitle(pending.draft.title || "");
-        setPendingDate(pending.draft.date || "");
-        setPendingStartTime(pending.draft.start_time || "");
-        setPendingEndTime(pending.draft.end_time || "");
-      }
 
       const explorerData = getExplorerData(data);
 
-      if (explorerData) {
+      if (data.type === "calendar" && data.calendar) {
+        const calendarResponse = data as CalendarCommandResponse;
+        setProjectExplorer(null);
+        setEmailResponse(null);
+        setCalendarCardResponse("");
+        setCalendarData(calendarResponse.calendar);
+        setResponse(calendarResponse.overview || calendarResponse.response || "Calendar updated.");
+        setShouldTypeResponse(true);
+
+        const view = calendarResponse.calendar;
+        if (view.presentation === "missing_fields" && view.draft) {
+          const pendingPayload: PendingCalendarEvent = {
+            missing_fields: view.missing_fields || [],
+            draft: view.draft,
+          };
+          setPendingEvent(pendingPayload);
+          setPendingTitle(view.draft.title || "");
+          setPendingDate(view.draft.date || "");
+          setPendingStartTime(view.draft.start_time || "");
+          setPendingEndTime(view.draft.end_time || "");
+        } else {
+          setPendingEvent(null);
+        }
+
+        if (view.presentation === "update_options" || view.presentation === "delete_options") {
+          setEventOptions({ action: view.presentation === "update_options" ? "update" : "delete", events: view.events });
+        } else {
+          setEventOptions(null);
+        }
+
+        if (view.presentation === "created" && view.events[0]) {
+          setEditableEvent(normalizeEditableEvent(view.events[0]));
+        }
+      } else if (explorerData) {
         setProjectExplorer(explorerData);
+        setCalendarData(null);
         setCalendarCardResponse("");
         setEmailResponse(null);
 
@@ -1745,6 +1897,7 @@ function App() {
         ].includes(data.type)
       ) {
         setProjectExplorer(null);
+        setCalendarData(null);
         setCalendarCardResponse("");
 
         const overview = buildAlfredOverview(
@@ -1766,6 +1919,7 @@ function App() {
         setShouldTypeResponse(true);
       } else {
         setProjectExplorer(null);
+        setCalendarData(null);
 
         const finalResponse = visibleResponse || data.response || "";
 
@@ -1801,6 +1955,7 @@ function App() {
       }
 
       setProjectExplorer(null);
+      setCalendarData(null);
         setCalendarCardResponse("");
       setEmailResponse(null);
       setEventOptions(null);
@@ -1841,10 +1996,14 @@ function App() {
     setPendingStatus("Creating event...");
 
     try {
+      const effectiveEnd = endTime
+        ? `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}T${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`
+        : `${date}T${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+
       const created = await createCalendarEvent({
         title,
         start_time: `${date}T${startTime}`,
-        end_time: endTime ? `${date}T${endTime}` : `${date}T${pendingEndTime || "23:59"}`,
+        end_time: effectiveEnd,
         location: pendingEvent.draft.location || "",
         description: pendingEvent.draft.description || "",
         reminder_minutes: 10,
@@ -2102,6 +2261,7 @@ function App() {
         end_time: toLocalApiDateTime(editEventEnd),
         location: editEventLocation.trim(),
         description: editEventDescription.trim(),
+        calendar_id: editableEvent.calendar_id || "primary",
       });
 
       const normalizedUpdated = normalizeEditableEvent(updated);
@@ -2152,7 +2312,7 @@ function App() {
     if (!confirmed) return;
 
     try {
-      await deleteCalendarEvent(event.id);
+      await deleteCalendarEvent(event.id, event.calendar_id || "primary");
 
       setShouldTypeResponse(true);
       setResponse(`Deleted calendar event: ${event.title}`);
@@ -2170,8 +2330,10 @@ function App() {
     if (!event.id) return;
 
     try {
-      await deleteCalendarEvent(event.id);
+      await deleteCalendarEvent(event.id, event.calendar_id || "primary");
       setEventOptions(null);
+      setCalendarData(null);
+      setShouldTypeResponse(true);
       setResponse(`Deleted event: ${event.title}`);
       await loadUpcomingEvents();
     } catch {
@@ -2180,7 +2342,34 @@ function App() {
     }
   }
 
-  function handleOptionUpdate(event: CalendarEvent) {
+  async function handleOptionUpdateYes(event: CalendarEvent) {
+    if (!event.id || !event.start || !event.end) return;
+
+    try {
+      const updated = await updateCalendarEvent(event.id, {
+        title: event.title,
+        start_time: event.start,
+        end_time: event.end,
+        location: event.location || "",
+        description: event.description || "",
+        calendar_id: event.calendar_id || "primary",
+      });
+
+      const normalized = normalizeEditableEvent(updated);
+      setEventOptions(null);
+      setCalendarData(null);
+      setEditableEvent(normalized);
+      setIsEditingEvent(false);
+      setShouldTypeResponse(true);
+      setResponse(`Updated calendar event: ${normalized?.title || event.title}`);
+      await loadUpcomingEvents();
+    } catch {
+      setShouldTypeResponse(true);
+      setResponse("Could not update event.");
+    }
+  }
+
+  function handleOptionUpdateNo(event: CalendarEvent) {
     const editable = normalizeEditableEvent(event);
     if (!editable) {
       setShouldTypeResponse(true);
@@ -2188,8 +2377,18 @@ function App() {
       return;
     }
 
+    // The proposed values are already in the preview, so No opens the full
+    // editor prefilled with them instead of forcing the user to retype them.
     setEventOptions(null);
+    setCalendarData(null);
     openEventEditor(editable);
+  }
+
+  function handleOptionDeleteNo() {
+    setEventOptions(null);
+    setCalendarData(null);
+    setShouldTypeResponse(true);
+    setResponse("Okay, I did not delete the event.");
   }
 
   useEffect(() => {
@@ -2229,6 +2428,8 @@ function App() {
       window.clearInterval(timer);
     };
   }, [response, shouldTypeResponse]);
+
+  const futureUpcomingEvents = events;
 
   return (
     <main className="alfred-shell">
@@ -2374,7 +2575,12 @@ function App() {
             ) : (
               <>
                 <div className="typewriter-response">
-                  {calendarCardResponse ? (
+                  {calendarData ? (
+                    <>
+                      <p className="calendar-quick-text">{displayedResponse}</p>
+                      {!isTypingResponse && <StructuredCalendarResponse data={calendarData} />}
+                    </>
+                  ) : calendarCardResponse ? (
                     <>
                       <p className="calendar-quick-text">{displayedResponse}</p>
 
@@ -2398,28 +2604,71 @@ function App() {
                     {eventOptions.events.map((event) => (
                       <div className="event-option-row" key={event.id}>
                         <div className="event-option-details">
-                          <strong>{event.title}</strong>
-                          <small>
-                            {new Date(event.start).toLocaleString([], {
-                              weekday: "short",
-                              month: "short",
-                              day: "numeric",
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })}
-                          </small>
+                          <strong>
+                          {event.original_title &&
+                          event.original_title !== event.title
+                            ? `${event.original_title} → ${event.title}`
+                            : event.title}
+                        </strong>
+                          {event.original_start ? (
+                            <>
+                              <small>
+                                Current:{" "}
+                                {new Date(event.original_start).toLocaleString([], {
+                                  weekday: "short",
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}
+                              </small>
+
+                              <small>
+                                Proposed:{" "}
+                                {new Date(event.start).toLocaleString([], {
+                                  weekday: "short",
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}
+                              </small>
+                            </>
+                          ) : (
+                            <small>
+                              {new Date(event.start).toLocaleString([], {
+                                weekday: "short",
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </small>
+                          )}
                           {event.location && <small>{event.location}</small>}
                         </div>
 
-                        {eventOptions.action === "delete" ? (
-                          <button type="button" onClick={() => handleOptionDelete(event)}>
-                            Delete
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => handleOptionUpdate(event)}>
-                            Update
-                          </button>
-                        )}
+                        <div className="event-confirm-actions">
+                          {eventOptions.action === "delete" ? (
+                            <>
+                              <button type="button" onClick={() => handleOptionDelete(event)}>
+                                Yes
+                              </button>
+                              <button type="button" onClick={handleOptionDeleteNo}>
+                                No
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button type="button" onClick={() => handleOptionUpdateYes(event)}>
+                                Yes
+                              </button>
+                              <button type="button" onClick={() => handleOptionUpdateNo(event)}>
+                                No
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2610,14 +2859,14 @@ function App() {
               <CalendarDays size={22} />
             </div>
 
-            {events.length === 0 ? (
+            {futureUpcomingEvents.length === 0 ? (
               <div className="empty-calendar-card">
                 <span>No events loaded.</span>
                 <small>Sync your calendar to view upcoming plans.</small>
               </div>
             ) : (
               <div className="event-list">
-                {events.slice(0, 3).map((event, index) => (
+                {futureUpcomingEvents.slice(0, 3).map((event, index) => (
                   <div className="event-item" key={event.id || index}>
                     <button
                       type="button"
