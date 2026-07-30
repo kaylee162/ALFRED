@@ -1,186 +1,57 @@
 const API_BASE = "http://localhost:8000";
 
-type RequestOptions = RequestInit;
-
-type CalendarEventPayload = {
+type CalendarCreatePayload = {
   title: string;
-  start_time: string;
-  end_time: string;
-  location?: string;
-  description?: string;
-  reminder_minutes?: number;
+  start_time?: string;
+  end_time?: string;
+  start_date?: string;
+  end_date?: string;
+  all_day?: boolean;
+  description?: string | null;
+  location?: string | null;
+  reminder_minutes?: number | null;
+  calendar_id?: string;
 };
 
-type CalendarEventFormPayload = {
-  title: string;
-  dateTime: string;
-  location?: string;
-  description?: string;
-  durationMinutes?: number;
-  reminderMinutes?: number;
-};
+type CalendarUpdatePayload = Partial<CalendarCreatePayload>;
 
-type ReminderPayload = {
-  title: string;
-  reminder_time: string;
-  reminder_minutes_before?: number;
-};
-
-async function requestJson(
-  url: string,
-  options: RequestOptions = {},
-  errorMessage = "Request failed"
-) {
-  const res = await fetch(url, options);
-  const data = await res.json().catch(() => null);
-
-  if (!res.ok) {
-    throw new Error(data?.detail || errorMessage);
+async function readJson(response: Response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || "Calendar request failed.");
   }
-
   return data;
 }
 
-export async function connectCalendar() {
-  return requestJson(
-    `${API_BASE}/calendar/connect`,
-    {},
-    "Failed to connect calendar"
-  );
-}
-
-export async function getUpcomingEvents(days = 7, maxResults = 20) {
-  return requestJson(
-    `${API_BASE}/calendar/upcoming?days=${days}&max_results=${maxResults}`,
-    {},
-    "Failed to fetch upcoming events"
-  );
-}
-
-export async function getDayEvents(date: string) {
-  return requestJson(
-    `${API_BASE}/calendar/day?date=${encodeURIComponent(date)}`,
-    {},
-    "Failed to fetch day events"
-  );
-}
-
-export async function createCalendarEvent({
-  title,
-  start_time,
-  end_time,
-  location = "",
-  description = "",
-  reminder_minutes = 10,
-}: CalendarEventPayload) {
-  return requestJson(
-    `${API_BASE}/calendar/event`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        title,
-        start_time,
-        end_time,
-        location: location || null,
-        description: description || null,
-        reminder_minutes,
-      }),
-    },
-    "Failed to create calendar event"
-  );
-}
-
-export async function createCalendarEventFromForm({
-  title,
-  dateTime,
-  location = "",
-  description = "",
-  durationMinutes = 60,
-  reminderMinutes = 10,
-}: CalendarEventFormPayload) {
-  const start = new Date(dateTime);
-  const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
-
-  return createCalendarEvent({
-    title,
-    start_time: start.toISOString(),
-    end_time: end.toISOString(),
-    location,
-    description,
-    reminder_minutes: reminderMinutes,
+export async function createCalendarEvent(payload: CalendarCreatePayload) {
+  const response = await fetch(`${API_BASE}/calendar/event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
+  return readJson(response);
 }
 
 export async function updateCalendarEvent(
   eventId: string,
-  eventData: CalendarEventPayload
+  payload: CalendarUpdatePayload
 ) {
-  return requestJson(
-    `${API_BASE}/calendar/event/${encodeURIComponent(eventId)}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        title: eventData.title,
-        start_time: eventData.start_time,
-        end_time: eventData.end_time,
-        location: eventData.location || null,
-        description: eventData.description || null,
-      }),
-    },
-    "Failed to update calendar event"
-  );
+  const response = await fetch(`${API_BASE}/calendar/event/${encodeURIComponent(eventId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
 }
 
-export async function deleteCalendarEvent(eventId: string) {
-  return requestJson(
-    `${API_BASE}/calendar/event/${encodeURIComponent(eventId)}`,
-    {
-      method: "DELETE",
-    },
-    "Failed to delete calendar event"
+export async function deleteCalendarEvent(
+  eventId: string,
+  calendarId = "primary"
+) {
+  const params = new URLSearchParams({ calendar_id: calendarId });
+  const response = await fetch(
+    `${API_BASE}/calendar/event/${encodeURIComponent(eventId)}?${params.toString()}`,
+    { method: "DELETE" }
   );
-}
-
-export async function createReminder(reminderData: ReminderPayload) {
-  return requestJson(
-    `${API_BASE}/calendar/reminder`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(reminderData),
-    },
-    "Failed to create reminder"
-  );
-}
-
-export async function getTomorrowPlan() {
-  return requestJson(
-    `${API_BASE}/calendar/plan/tomorrow`,
-    {},
-    "Failed to generate tomorrow plan"
-  );
-}
-
-export async function getDayPlan(date: string) {
-  return requestJson(
-    `${API_BASE}/calendar/plan/day?date=${encodeURIComponent(date)}`,
-    {},
-    "Failed to generate day plan"
-  );
-}
-
-export async function getWeeklyPlan(startDate: string) {
-  return requestJson(
-    `${API_BASE}/calendar/plan/week?start_date=${encodeURIComponent(startDate)}`,
-    {},
-    "Failed to generate weekly plan"
-  );
+  return readJson(response);
 }

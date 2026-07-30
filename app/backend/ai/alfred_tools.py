@@ -5,78 +5,38 @@ To add a future tool, add its schema to ``ALFRED_TOOLS`` and connect the
 implementation in ``ai/tool_executor.py``.
 """
 
-ALFRED_TOOLS = [{'type': 'function',
-  'function': {'name': 'create_calendar_event',
-               'description': 'Create a Google Calendar event.',
-               'parameters': {'type': 'object',
-                              'properties': {'title': {'type': 'string',
-                                                       'description': 'The event title.'},
-                                             'start_datetime': {'type': 'string',
-                                                                'description': 'The event start '
-                                                                               'datetime in ISO '
-                                                                               'format.'},
-                                             'end_datetime': {'type': 'string',
-                                                              'description': 'The event end '
-                                                                             'datetime in ISO '
-                                                                             'format.'},
-                                             'location': {
-                                                            "type": ["string", "null"],
-                                                            "description": (
-                                                                "Optional city or location. "
-                                                                "Leave null if the user did not specify a location. "
-                                                                "Never invent a city."
-                                                            ),
-                                                        },
-                                             'description': {'type': ['string', 'null'],
-                                                             'description': 'Optional event '
-                                                                            'description.'},
-                                             'reminder_minutes': {'type': ['integer', 'null'],
-                                                                  'description': 'Minutes before '
-                                                                                 'the event to '
-                                                                                 'show a '
-                                                                                 'reminder.'}},
-                              'required': ['title', 'start_datetime', 'end_datetime'],
-                              'additionalProperties': False}}},
- {'type': 'function',
-  'function': {'name': 'get_calendar_day',
-               'description': 'Get calendar events for one specific day.',
-               'parameters': {'type': 'object',
-                              'properties': {'date': {'type': 'string',
-                                                      'description': 'Date in YYYY-MM-DD format.'}},
-                              'required': ['date'],
-                              'additionalProperties': False}}},
- {'type': 'function',
-  'function': {'name': 'get_upcoming_calendar_events',
-               'description': 'Get upcoming calendar events.',
-               'parameters': {'type': 'object',
-                              'properties': {'days': {'type': 'integer',
-                                                      'description': 'Number of days to look '
-                                                                     'ahead.'},
-                                             'max_results': {'type': 'integer',
-                                                             'description': 'Maximum number of '
-                                                                            'events to return.'}},
-                              'required': ['days', 'max_results'],
-                              'additionalProperties': False}}},
- {'type': 'function',
-  'function': {'name': 'plan_calendar_day',
-               'description': 'Generate a daily plan based on calendar events.',
-               'parameters': {'type': 'object',
-                              'properties': {'date': {'type': 'string',
-                                                      'description': 'Date in YYYY-MM-DD format.'}},
-                              'required': ['date'],
-                              'additionalProperties': False}}},
- {'type': 'function',
-  'function': {'name': 'summarize_calendar_week',
-               'description': 'Generate a weekly calendar summary.',
-               'parameters': {'type': 'object',
-                              'properties': {'start_date': {'type': 'string',
-                                                            'description': 'Week start date in '
-                                                                           'YYYY-MM-DD format. Use '
-                                                                           'Sunday as the start of '
-                                                                           'the week.'}},
-                              'required': ['start_date'],
-                              'additionalProperties': False}}},
- {'type': 'function',
+ALFRED_TOOLS = [
+{"type": "function",
+        "function": {
+            "name": "calendar",
+            "description": (
+                "Handle Google Calendar requests written in natural language, "
+                "including viewing, creating, finding, updating, rescheduling, "
+                "renaming, and deleting events. Always pass the user's complete "
+                "original calendar command unchanged. Do not guess event IDs, "
+                "rewrite dates or times, or directly perform updates or deletes. "
+                "The calendar intent layer returns structured views, candidate matches, "
+                "proposed changes, and confirmation requirements. Never call any "
+                "other calendar mutation tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": (
+                            "The user's full original calendar request copied "
+                            "exactly, without summarizing, rewriting, or resolving "
+                            "dates and times."
+                        ),
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        },
+    },
+{'type': 'function',
   'function': {'name': 'list_projects',
                'description': "Show the user's project folders from the allowed project "
                               'directories, including src and source.',

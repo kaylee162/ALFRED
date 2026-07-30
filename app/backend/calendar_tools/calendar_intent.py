@@ -1,935 +1,446 @@
 from __future__ import annotations
 
-import json
 import re
-from datetime import datetime, timedelta, time
+from datetime import date, datetime, time, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
 
 from .calendar_service import (
+    LOCAL_TZ,
+    TIMEZONE,
+    create_calendar_event,
+    list_events_between,
     list_events_for_day,
     list_upcoming_events,
-    create_calendar_event,
-)
-from .planning_service import generate_daily_plan, generate_weekly_summary
-
-from .calendar_service import (
-    list_events_for_day,
-    list_upcoming_events,
-    create_calendar_event,
-    update_calendar_event,
-    delete_calendar_event,
 )
 
 WEEKDAYS = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
 }
-
-CREATE_RE = re.compile(
-    r"\b(add|create|schedule|book|set up)\b.*\b(event|meeting|appointment|call)\b",
-    re.IGNORECASE,
-)
-
-TIME_RE = re.compile(
-    r"(?<![/\d])(?:\bat\s+|@)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b(?!/\d)",
-    re.IGNORECASE,
-)
-
-DATE_RE = re.compile(
-    r"\b("
-    r"today|tomorrow|tommorow|tmrw|tmr|tmw|"
-    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
-    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|"
-    r"\d{1,2}(?:st|nd|rd|th)?|"
-    r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
-    r")\b",
-    re.IGNORECASE,
-)
-
-TITLE_RE = re.compile(
-    r'\b(?:title|titled|called|named)\s+["“]?(.+?)["”]?(?=\s+(?:for|on|at|from|to|tomorrow|today|tmr|tmrw|description|location)\b|$)',
-    re.IGNORECASE,
-)
-
-RANGE_RE = re.compile(
-    r"\b(?:from\s+)?(.+?)\s+(?:to|until|through)\s+(.+?)(?=\s+(?:location|description)\b|$)",
-    re.IGNORECASE,
-)
-
-COMPACT_RANGE_RE = re.compile(
-    r"\bfrom\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*-\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?=\s|$)",
-    re.IGNORECASE,
-)
-
-
-def _format_event(event: dict) -> str:
-    title = event.get("title", "Untitled")
-    start = event.get("start")
-
-    try:
-        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-        time_text = start_dt.strftime("%I:%M %p").lstrip("0")
-    except Exception:
-        time_text = "All day"
-
-    location = event.get("location")
-    if location:
-        return f"• {time_text} — {title} at {location}"
-
-    return f"• {time_text} — {title}"
-
-
-def _format_events(date_label: str, events: list[dict]) -> str:
-    if not events:
-        if date_label == "tomorrow":
-            return "No events tomorrow."
-        if date_label == "today":
-            return "No events today."
-        return f"No events for {date_label}."
-
-    event_lines = "\n".join(_format_event(event) for event in events)
-    return f"Here’s your calendar for {date_label}:\n{event_lines}"
-
-
-def _start_of_week(date):
-    days_since_sunday = (date.weekday() + 1) % 7
-    return date - timedelta(days=days_since_sunday)
-
-
-def _default_title(text: str) -> str:
-    lowered = text.lower()
-
-    if "meeting" in lowered:
-        return "Meeting"
-    if "appointment" in lowered:
-        return "Appointment"
-    if "call" in lowered:
-        return "Call"
-
-    return "New Event"
-
-
-def _has_date(text: str) -> bool:
-    return bool(DATE_RE.search(text))
-
-
-def _has_time(text: str) -> bool:
-    return bool(TIME_RE.search(text))
-
-
-def _next_weekday(target_weekday: int, base_date: datetime.date) -> datetime.date:
-    days_ahead = (target_weekday - base_date.weekday()) % 7
-    return base_date + timedelta(days=days_ahead)
-
 MONTHS = {
-    "jan": 1, "january": 1,
-    "feb": 2, "february": 2,
-    "mar": 3, "march": 3,
-    "apr": 4, "april": 4,
-    "may": 5,
-    "jun": 6, "june": 6,
-    "jul": 7, "july": 7,
-    "aug": 8, "august": 8,
-    "sep": 9, "september": 9,
-    "oct": 10, "october": 10,
-    "nov": 11, "november": 11,
+    "jan": 1, "january": 1, "feb": 2, "february": 2,
+    "mar": 3, "march": 3, "apr": 4, "april": 4, "may": 5,
+    "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11,
     "dec": 12, "december": 12,
 }
+CREATE_RE = re.compile(r"\b(add|create|schedule|book|set up)\b", re.I)
+UPDATE_RE = re.compile(r"\b(update|edit|change|move|reschedule|rename)\b", re.I)
+DELETE_RE = re.compile(r"\b(delete|remove|cancel)\b", re.I)
+TIME_RE = re.compile(r"(?<![\d/])(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.I)
+DATE_WORD_RE = re.compile(
+    r"\b(today|tomorrow|tommorow|tmrw|tmr|tmw|monday|tuesday|wednesday|"
+    r"thursday|friday|saturday|sunday)\b", re.I
+)
 
 
-def _clean_date_text(text: str) -> str:
-    return re.sub(
-        r"\b(for|on|at|from|to|until|through|called|named|titled|title)\b",
-        " ",
-        text,
-        flags=re.IGNORECASE,
-    ).strip()
+def _now() -> datetime:
+    return datetime.now(LOCAL_TZ)
 
 
-def _parse_explicit_date(text: str) -> datetime.date | None:
-    today = datetime.now().date()
-    cleaned = _clean_date_text(text.lower())
-
-    slash_match = re.search(
-        r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b",
-        cleaned,
-    )
-    if slash_match:
-        month = int(slash_match.group(1))
-        day = int(slash_match.group(2))
-        year = int(slash_match.group(3)) if slash_match.group(3) else today.year
-
-        if year < 100:
-            year += 2000
-
-        return datetime(year, month, day).date()
-
-    month_names = "|".join(MONTHS.keys())
-
-    month_day_match = re.search(
-        rf"\b({month_names})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?\b",
-        cleaned,
-        re.IGNORECASE,
-    )
-    if month_day_match:
-        month = MONTHS[month_day_match.group(1).lower()]
-        day = int(month_day_match.group(2))
-        year = int(month_day_match.group(3)) if month_day_match.group(3) else today.year
-
-        return datetime(year, month, day).date()
-
-    day_month_match = re.search(
-        rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({month_names})(?:,?\s+(\d{{4}}))?\b",
-        cleaned,
-        re.IGNORECASE,
-    )
-    if day_month_match:
-        day = int(day_month_match.group(1))
-        month = MONTHS[day_month_match.group(2).lower()]
-        year = int(day_month_match.group(3)) if day_month_match.group(3) else today.year
-
-        return datetime(year, month, day).date()
-
-    day_only_match = re.search(
-        r"\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\b",
-        cleaned,
-        re.IGNORECASE,
-    )
-    if day_only_match:
-        day = int(day_only_match.group(1))
-        return datetime(today.year, today.month, day).date()
-
-    return None
-
-def _resolve_date_from_text(
-    text: str,
-    fallback_text: str = "",
+def _calendar_response(
     *,
-    fallback_date: datetime.date | None = None,
-) -> datetime.date:
-    today = datetime.now().date()
-    lowered = text.lower()
-
-    if any(word in lowered for word in ["tomorrow", "tommorow", "tmrw", "tmr", "tmw"]):
-        return today + timedelta(days=1)
-
-    if "today" in lowered:
-        return today
-
-    explicit_date = _parse_explicit_date(text)
-    if explicit_date:
-        return explicit_date
-
-    for name, index in WEEKDAYS.items():
-        if re.search(rf"\b{name}\b", lowered):
-            return _next_weekday(index, today)
-
-    if fallback_date:
-        return fallback_date
-
-    if fallback_text:
-        return _resolve_date_from_text(fallback_text)
-
-    return today
-
-def _parse_clock(text: str, inherited_meridiem: str | None = None) -> time:
-    match = TIME_RE.search(text)
-
-    if not match:
-        raise ValueError("Missing time")
-
-    hour = int(match.group(1))
-    minute = int(match.group(2) or 0)
-    meridiem = match.group(3)
-
-    if not meridiem and inherited_meridiem:
-        meridiem = inherited_meridiem
-
-    if meridiem:
-        meridiem = meridiem.lower()
-
-        if meridiem == "pm" and hour != 12:
-            hour += 12
-        elif meridiem == "am" and hour == 12:
-            hour = 0
-    elif 1 <= hour <= 7:
-        hour += 12
-
-    return time(hour=hour, minute=minute)
-
-
-def _meridiem_from_text(text: str) -> str | None:
-    match = TIME_RE.search(text)
-
-    if not match:
-        return None
-
-    return match.group(3).lower() if match.group(3) else None
-
-
-def _pending_event_response(missing_fields: list[str], draft: dict) -> str:
-    readable = {
-        "title": "title",
-        "date": "date",
-        "time": "time",
+    overview: str,
+    presentation: str,
+    events: list[dict[str, Any]] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "type": "calendar",
+        "response": overview,
+        "overview": overview,
+        "calendar": {
+            "presentation": presentation,
+            "timezone": TIMEZONE,
+            "events": events or [],
+            **extra,
+        },
+        "requires_confirmation": presentation in {"update_options", "delete_options"},
     }
 
-    labels = [readable[field] for field in missing_fields]
 
-    if len(labels) == 1:
-        message = f"Add a {labels[0]}."
-    elif len(labels) == 2:
-        message = f"Add a {labels[0]} and {labels[1]}."
-    else:
-        message = f"Add a {', '.join(labels[:-1])}, and {labels[-1]}."
+def _next_weekday(target: int, base: date) -> date:
+    return base + timedelta(days=(target - base.weekday()) % 7)
 
-    return (
-        f"{message}\n"
-        f"__ALFRED_PENDING_EVENT__={json.dumps({
-            'missing_fields': missing_fields,
-            'draft': draft,
-        })}"
+
+def _explicit_date(text: str, base: date | None = None) -> date | None:
+    base = base or _now().date()
+    lowered = text.lower()
+    if any(term in lowered for term in ("tomorrow", "tommorow", "tmrw", "tmr", "tmw")):
+        return base + timedelta(days=1)
+    if "today" in lowered:
+        return base
+    for name, weekday in WEEKDAYS.items():
+        if re.search(rf"\b{name}\b", lowered):
+            return _next_weekday(weekday, base)
+
+    slash = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", text)
+    if slash:
+        year = int(slash.group(3) or base.year)
+        if year < 100:
+            year += 2000
+        return date(year, int(slash.group(1)), int(slash.group(2)))
+
+    month_names = "|".join(MONTHS)
+    match = re.search(
+        rf"\b({month_names})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?\b",
+        text, re.I,
     )
+    if match:
+        return date(int(match.group(3) or base.year), MONTHS[match.group(1).lower()], int(match.group(2)))
+    reverse = re.search(
+        rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({month_names})(?:,?\s+(\d{{4}}))?\b",
+        text, re.I,
+    )
+    if reverse:
+        return date(int(reverse.group(3) or base.year), MONTHS[reverse.group(2).lower()], int(reverse.group(1)))
+    return None
 
 
-def _extract_created_datetime(created: dict, key: str, fallback: datetime) -> str:
-    value = created.get(key)
-
-    if isinstance(value, dict):
-        return value.get("dateTime") or value.get("date") or fallback.isoformat()
-
-    if isinstance(value, str):
-        return value
-
-    return fallback.isoformat()
-
-
-def _strip_date_prefix(text: str) -> str:
-    return re.sub(r"^\s*(for|on)\s+", "", text.strip(), flags=re.IGNORECASE)
+def _clock_matches(text: str) -> list[re.Match[str]]:
+    matches = []
+    for match in TIME_RE.finditer(text):
+        before = text[max(0, match.start() - 5):match.start()].lower()
+        hour = int(match.group(1))
+        # Avoid treating bare date numbers as times unless introduced by at/@ or am/pm/colon.
+        if not match.group(2) and not match.group(3) and not re.search(r"(?:at\s*|@\s*)$", before):
+            continue
+        if hour <= 24:
+            matches.append(match)
+    return matches
 
 
-def _part_has_time(text: str) -> bool:
-    return bool(TIME_RE.search(text))
+def _parse_clock(match: re.Match[str], inherited_meridiem: str | None = None) -> time:
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = (match.group(3) or inherited_meridiem or "").lower()
+    if meridiem == "pm" and hour != 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+    elif not meridiem and 1 <= hour <= 7:
+        hour += 12
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("Invalid time")
+    return time(hour, minute)
 
 
-def _parse_event_window(text: str) -> tuple[datetime, datetime, str]:
-    compact_match = COMPACT_RANGE_RE.search(text)
-    range_match = RANGE_RE.search(text)
+def _extract_times(text: str) -> tuple[time | None, time | None]:
+    matches = _clock_matches(text)
+    if not matches:
+        return None, None
+    if len(matches) == 1:
+        return _parse_clock(matches[0]), None
+    inherited = matches[1].group(3)
+    return _parse_clock(matches[0], inherited), _parse_clock(matches[1])
 
-    if compact_match:
-        start_part = compact_match.group(1)
-        end_part = compact_match.group(2)
 
-        date_part = text[:compact_match.start()] + text[compact_match.end():]
-        start_date = _resolve_date_from_text(date_part)
+def _extract_title(text: str, action: str) -> str | None:
+    explicit = re.search(r'\b(?:title|titled|called|named)\s+["“]?(.+?)["”]?(?=\s+(?:on|at|from|to|location|description)\b|$)', text, re.I)
+    if explicit:
+        return explicit.group(1).strip(' "“”')
+    cleaned = re.sub(r"^\s*(?:please\s+)?(?:can you\s+)?", "", text, flags=re.I)
+    cleaned = re.sub(rf"^.*?\b{action}\b", "", cleaned, count=1, flags=re.I)
+    cleaned = re.sub(r"^\s*(?:an?\s+)?(?:calendar\s+)?(?:event|meeting|appointment|call)?\s*", "", cleaned, flags=re.I)
+    split = re.split(
+        r"\b(?:on|for|at|from|today|tomorrow|tommorow|tmrw|tmr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b",
+        cleaned, maxsplit=1, flags=re.I,
+    )[0].strip(" ,.-")
+    return split or None
 
-        end_meridiem = _meridiem_from_text(end_part)
 
-        start = datetime.combine(start_date, _parse_clock(start_part, end_meridiem))
-        end = datetime.combine(start_date, _parse_clock(end_part))
-
-        if end <= start:
-            end += timedelta(days=1)
-
-        cleaned_text = text[:compact_match.start()] + text[compact_match.end():]
-        return start, end, cleaned_text.strip()
-
-    if range_match:
-        start_part = _strip_date_prefix(range_match.group(1))
-        end_part = _strip_date_prefix(range_match.group(2))
-
-        start_date = _resolve_date_from_text(start_part, text)
-        end_date = _resolve_date_from_text(end_part, fallback_date=start_date)
-
-        start_has_time = _part_has_time(start_part)
-        end_has_time = _part_has_time(end_part)
-
-        if start_has_time:
-            end_meridiem = _meridiem_from_text(end_part)
-            start_time = _parse_clock(start_part, end_meridiem)
-        else:
-            start_time = time(0, 0)
-
-        if end_has_time:
-            end_time = _parse_clock(end_part)
-        else:
-            end_time = time(23, 59)
-
-        start = datetime.combine(start_date, start_time)
-        end = datetime.combine(end_date, end_time)
-
-        if end <= start:
-            end += timedelta(days=1)
-
-        cleaned_text = text[:range_match.start()] + text[range_match.end():]
-        return start, end, cleaned_text.strip()
-
-    time_match = TIME_RE.search(text)
-
-    if not time_match:
-        raise ValueError("Missing time")
-
-    target_date = _resolve_date_from_text(text)
-    start = datetime.combine(target_date, _parse_clock(text))
-    end = start + timedelta(hours=1)
-
-    cleaned_text = text[:time_match.start()] + text[time_match.end():]
-    return start, end, cleaned_text.strip()
-
-def _try_create_event(command: str) -> str | None:
-    original = command.strip()
-    text = re.sub(r"^\s*alfred[, ]*", "", original, flags=re.IGNORECASE)
-
-    if not CREATE_RE.search(text):
-        return None
-
-    title = _default_title(text)
-    has_explicit_title = False
-
-    title_match = TITLE_RE.search(text)
-    if title_match:
-        title = title_match.group(1).strip().strip('"“”').title()
-        has_explicit_title = True
-        text = text[:title_match.start()] + text[title_match.end():]
-
-    text = re.sub(
-        r"^\s*(please\s+)?(can you\s+)?(add|create|schedule|book|set up)\s+(an?\s+)?(calendar\s+)?(event|meeting|appointment|call)?",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    ).strip()
-
-    description = None
-    description_match = re.search(r"\bdescription\s+(.+)$", text, re.IGNORECASE)
-    if description_match:
-        description = description_match.group(1).strip()
-        text = text[:description_match.start()].strip()
-
+def _extract_metadata(text: str) -> tuple[str | None, str | None]:
     location = None
-    location_match = re.search(r"\blocation\s+(.+)$", text, re.IGNORECASE)
+    description = None
+    location_match = re.search(r"\blocation\s+(.+?)(?=\s+description\b|$)", text, re.I)
+    description_match = re.search(r"\bdescription\s+(.+)$", text, re.I)
     if location_match:
         location = location_match.group(1).strip()
-        text = text[:location_match.start()].strip()
+    if description_match:
+        description = description_match.group(1).strip()
+    return location, description
 
-    missing_fields = []
 
-    if not has_explicit_title:
-        missing_fields.append("title")
+def _create(command: str) -> dict[str, Any]:
+    title = _extract_title(command, r"(?:add|create|schedule|book|set up)")
+    target_date = _explicit_date(command)
+    start_clock, end_clock = _extract_times(command)
+    location, description = _extract_metadata(command)
 
-    if not _has_time(text):
-        missing_fields.append("time")
+    # Explicit all-day wording is the only path that creates an all-day event.
+    all_day = bool(re.search(r"\ball[- ]day\b", command, re.I))
+    missing: list[str] = []
+    if not title:
+        missing.append("title")
+    if not target_date:
+        missing.append("date")
+    if not all_day and not start_clock:
+        missing.append("time")
 
-    if missing_fields:
-        draft = {
-            "title": title if has_explicit_title else "",
-            "date": datetime.now().date().isoformat(),
-            "end_date": "",
-            "start_time": "",
-            "end_time": "",
-            "location": location,
-            "description": description,
-        }
-
-        try:
-            start, end, _ = _parse_event_window(text)
-            draft["date"] = start.date().isoformat()
-            draft["end_date"] = end.date().isoformat()
-            draft["start_time"] = start.strftime("%H:%M")
-            draft["end_time"] = end.strftime("%H:%M")
-        except ValueError:
-            try:
-                target_date = _resolve_date_from_text(text)
-                draft["date"] = target_date.isoformat()
-            except Exception:
-                pass
-
-        return _pending_event_response(missing_fields, draft)
-
-    try:
-        start, end, _ = _parse_event_window(text)
-    except ValueError:
-        draft = {
-            "title": title if has_explicit_title else "",
-            "date": "",
-            "end_date": "",
-            "start_time": "",
-            "end_time": "",
-            "location": location,
-            "description": description,
-        }
-
-        return _pending_event_response(["date", "time"], draft)
-
-    created = create_calendar_event(
-        title=title,
-        start_time=start.isoformat(),
-        end_time=end.isoformat(),
-        location=location,
-        description=description,
-    )
-
-    event_payload = {
-        "id": created.get("id"),
-        "title": created.get("title", title),
-        "start": _extract_created_datetime(created, "start", start),
-        "end": _extract_created_datetime(created, "end", end),
+    draft = {
+        "title": title or "",
+        "date": target_date.isoformat() if target_date else "",
+        "start_time": start_clock.strftime("%H:%M") if start_clock else "",
+        "end_time": end_clock.strftime("%H:%M") if end_clock else "",
+        "all_day": all_day,
         "location": location,
         "description": description,
     }
+    if missing:
+        labels = ", ".join(missing)
+        return _calendar_response(
+            overview=f"I need the {labels} before I can create that event.",
+            presentation="missing_fields",
+            missing_fields=missing,
+            draft=draft,
+        )
 
-    duration = end - start
-    total_minutes = int(duration.total_seconds() / 60)
-
-    if total_minutes % 60 == 0:
-        hours = total_minutes // 60
-        duration_text = f"{hours} hour{'s' if hours != 1 else ''}"
+    if all_day:
+        created = create_calendar_event(
+            title=title or "Untitled", start_date=target_date.isoformat(),
+            end_date=(target_date + timedelta(days=1)).isoformat(), all_day=True,
+            location=location, description=description,
+        )
     else:
-        duration_text = f"{total_minutes} minutes"
-
-    return (
-        f"Created event: {title}\n"
-        f"When: {start.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}\n"
-        f"Ends: {end.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}\n"
-        f"Duration: {duration_text}\n"
-        f"Location: {location or 'None'}\n"
-        f"__ALFRED_CALENDAR_EVENT__={json.dumps(event_payload)}"
-    )
-
-UPDATE_RE = re.compile(
-    r"\b(update|edit|change|move|reschedule)\b.*\b(event|meeting|appointment|call)?\b",
-    re.IGNORECASE,
-)
-
-DELETE_RE = re.compile(
-    r"\b(delete|remove|cancel)\b.*\b(event|meeting|appointment|call)?\b",
-    re.IGNORECASE,
-)
-
-
-def _event_time(event: dict) -> datetime | None:
-    try:
-        return parser.parse(event["start"]).replace(tzinfo=None)
-    except Exception:
-        return None
-
-
-def _event_end_time(event: dict) -> datetime | None:
-    try:
-        return parser.parse(event["end"]).replace(tzinfo=None)
-    except Exception:
-        start = _event_time(event)
-        return start + timedelta(hours=1) if start else None
-
-
-def _extract_title_query(text: str) -> str | None:
-    match = re.search(
-        r"\b(?:called|named|titled|title)\s+['\"]?(.+?)['\"]?(?=\s+(?:to|at|on|for|from|location|description)\b|$)",
-        text,
-        re.IGNORECASE,
-    )
-    return match.group(1).strip().lower() if match else None
-
-
-def _extract_search_text(command: str) -> str:
-    text = command.lower()
-
-    # For update commands, search using the part before "to".
-    if re.search(r"\b(update|edit|change|move|reschedule)\b", text):
-        parts = re.split(r"\s+\bto\b\s+", command, maxsplit=1, flags=re.IGNORECASE)
-        return parts[0]
-
-    return command
-
-
-def _extract_target_text(command: str) -> str:
-    parts = re.split(r"\s+\bto\b\s+", command, maxsplit=1, flags=re.IGNORECASE)
-    return parts[1] if len(parts) > 1 else command
-
-
-def _is_tonight(text: str) -> bool:
-    return "tonight" in text.lower()
-
-
-def _matches_time(event: dict, search_text: str) -> bool:
-    if not _has_time(search_text) and not _is_tonight(search_text):
-        return True
-
-    start = _event_time(event)
-    if not start:
-        return False
-
-    if _is_tonight(search_text):
-        return start.hour >= 17
-
-    try:
-        search_time = _parse_clock(search_text)
-    except Exception:
-        return True
-
-    return start.hour == search_time.hour and start.minute == search_time.minute
-
-
-def _find_events_from_command(command: str) -> list[dict]:
-    search_text = _extract_search_text(command)
-    target_date = _resolve_date_from_text(search_text)
-
-    events = list_events_for_day(target_date.isoformat())
-    title_query = _extract_title_query(search_text)
-
-    if title_query:
-        events = [
-            event for event in events
-            if title_query in event.get("title", "").lower()
-        ]
-
-    events = [
-        event for event in events
-        if _matches_time(event, search_text)
-    ]
-
-    return events
-
-
-def _selection_payload(action: str, message: str, events: list[dict]) -> str:
-    return (
-        f"{message}\n"
-        f"__ALFRED_EVENT_OPTIONS__={json.dumps({
-            'action': action,
-            'events': events,
-        })}"
-    )
-
-
-def _format_updated_response(updated: dict) -> str:
-    return (
-        f"Updated event: {updated.get('title', 'Untitled')}\n"
-        f"When: {updated.get('start')}\n"
-        f"Ends: {updated.get('end')}"
-    )
-
-
-def _try_delete_event(command: str) -> str | None:
-    if not DELETE_RE.search(command):
-        return None
-
-    matches = _find_events_from_command(command)
-
-    if not matches:
-        return "Sorry, I couldn't find that event."
-
-    if len(matches) > 1:
-        return _selection_payload(
-            "delete",
-            "I found multiple matching events. Pick the one to delete.",
-            matches,
+        start = datetime.combine(target_date, start_clock, tzinfo=LOCAL_TZ)
+        end = datetime.combine(target_date, end_clock, tzinfo=LOCAL_TZ) if end_clock else start + timedelta(hours=1)
+        if end <= start:
+            end += timedelta(days=1)
+        created = create_calendar_event(
+            title=title or "Untitled", start_time=start.isoformat(), end_time=end.isoformat(),
+            location=location, description=description,
         )
+    return _calendar_response(
+        overview=f"Created event: {created['title']}",
+        presentation="created",
+        events=[created],
+    )
 
-    event = matches[0]
-    delete_calendar_event(event["id"])
 
-    return f"Deleted event: {event.get('title', 'Untitled')}"
+def _strip_selector_noise(text: str) -> str | None:
+    cleaned = re.sub(r"\b(update|edit|change|move|reschedule|rename|delete|remove|cancel)\b", " ", text, flags=re.I)
+    cleaned = re.sub(r"\b(my|the|an?|calendar|event|meeting|appointment|call|called|named|titled|title|on|for|at|from)\b", " ", cleaned, flags=re.I)
+    cleaned = DATE_WORD_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b", " ", cleaned)
+    for match in reversed(_clock_matches(cleaned)):
+        cleaned = cleaned[:match.start()] + " " + cleaned[match.end():]
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,!?\"")
+    return cleaned.lower() or None
 
 
-def _try_update_event(command: str) -> str | None:
-    if not UPDATE_RE.search(command):
+def _event_datetime(event: dict[str, Any], key: str = "start") -> datetime | None:
+    value = event.get(key)
+    if not value:
+        return None
+    try:
+        parsed = parser.parse(value)
+        return parsed.replace(tzinfo=LOCAL_TZ) if parsed.tzinfo is None else parsed.astimezone(LOCAL_TZ)
+    except Exception:
         return None
 
-    matches = _find_events_from_command(command)
 
-    if not matches:
-        return "Sorry, I couldn't find that event."
+def _score_title(title: str, query: str | None) -> int:
+    if not query:
+        return 1
+    normalized_title = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    normalized_query = re.sub(r"[^a-z0-9]+", " ", query.lower()).strip()
+    if normalized_title == normalized_query:
+        return 100
+    if normalized_title.startswith(normalized_query):
+        return 90
+    if normalized_query in normalized_title:
+        return 80
+    overlap = len(set(normalized_title.split()) & set(normalized_query.split()))
+    return 40 + overlap if overlap else 0
 
-    if len(matches) > 1:
-        return _selection_payload(
-            "update",
-            "I found multiple matching events. Pick the one to update.",
-            matches,
-        )
 
-    event = matches[0]
+def _find_candidates(selector: str) -> list[dict[str, Any]]:
+    target_date = _explicit_date(selector)
+    requested_time, _ = _extract_times(selector)
+    query = _strip_selector_noise(selector)
+    events = list_events_for_day(target_date) if target_date else list_upcoming_events(days=90, max_results=250)
+    scored: list[tuple[int, datetime, dict[str, Any]]] = []
+    for event in events:
+        start = _event_datetime(event)
+        if not start or not event.get("id"):
+            continue
+        if requested_time and (start.hour, start.minute) != (requested_time.hour, requested_time.minute):
+            continue
+        score = _score_title(event.get("title", ""), query)
+        if score:
+            scored.append((score, start, event))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in scored[:12]]
 
-    current_start = _event_time(event)
-    current_end = _event_end_time(event)
 
+def _split_update(command: str) -> tuple[str, str]:
+    parts = re.split(r"\s+\bto\b\s+", command.strip(), maxsplit=1, flags=re.I)
+    return (parts[0], parts[1]) if len(parts) == 2 else (command, "")
+
+
+def _preview_update(
+    event: dict[str, Any],
+    change: str,
+    *,
+    rename_mode: bool = False,
+) -> dict[str, Any]:
+    preview = dict(event)
+    preview["original"] = dict(event)
+    preview["original_title"] = event.get("title")
+    preview["original_start"] = event.get("start")
+    preview["original_end"] = event.get("end")
+    current_start = _event_datetime(event)
+    current_end = _event_datetime(event, "end")
     if not current_start:
-        return "Sorry, I found the event, but couldn't read its start time."
+        return preview
+    duration = current_end - current_start if current_end and current_end > current_start else timedelta(hours=1)
+    new_date = _explicit_date(change, current_start.date()) if change else None
+    new_time, new_end_time = _extract_times(change)
+    start = datetime.combine(new_date or current_start.date(), new_time or current_start.timetz().replace(tzinfo=None), tzinfo=LOCAL_TZ)
+    end = datetime.combine(start.date(), new_end_time, tzinfo=LOCAL_TZ) if new_end_time else start + duration
+    if end <= start:
+        end += timedelta(days=1)
+    rename = re.match(r"\s*(?:title|titled|called|named)\s+(.+)$", change, re.I)
+    renamed_title = None
+    if rename:
+        renamed_title = rename.group(1).strip(' "“”')
+    elif rename_mode and change.strip():
+        # "rename Dentist to Dental Appointment" should use everything after
+        # "to" as the new title; the user should not have to type "named".
+        renamed_title = change.strip().strip(' "“”')
 
-    duration = (
-        current_end - current_start
-        if current_end and current_end > current_start
-        else timedelta(hours=1)
+    preview.update({
+        "title": renamed_title or event.get("title"),
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "all_day": False,
+    })
+    return preview
+
+
+def _update(command: str) -> dict[str, Any]:
+    selector, change = _split_update(command)
+    matches = _find_candidates(selector)
+    if not matches:
+        return _calendar_response(
+            overview="I couldn't find a matching event. No event was changed.",
+            presentation="message",
+        )
+    rename_mode = bool(re.search(r"\brename\b", command, re.I))
+    previews = [
+        _preview_update(event, change, rename_mode=rename_mode)
+        for event in matches
+    ]
+    overview = "I found one matching event. Review the proposed change before saving." if len(previews) == 1 else f"I found {len(previews)} possible events. Choose the correct one."
+    return _calendar_response(
+        overview=overview,
+        presentation="update_options",
+        events=previews,
+        action="update",
     )
 
-    target_text = _extract_target_text(command)
 
-    new_title = event.get("title", "Untitled")
-    title_match = TITLE_RE.search(target_text)
-    if title_match:
-        new_title = title_match.group(1).strip().strip('"“”').title()
-
-    new_date = _resolve_date_from_text(
-        target_text,
-        fallback_date=current_start.date(),
+def _delete(command: str) -> dict[str, Any]:
+    matches = _find_candidates(command)
+    if not matches:
+        return _calendar_response(
+            overview="I couldn't find a matching event. No event was deleted.",
+            presentation="message",
+        )
+    overview = "I found one matching event. Confirm deletion before continuing." if len(matches) == 1 else f"I found {len(matches)} possible events. Choose the one to delete."
+    return _calendar_response(
+        overview=overview,
+        presentation="delete_options",
+        events=matches,
+        action="delete",
     )
 
-    if _has_time(target_text):
-        new_start = datetime.combine(new_date, _parse_clock(target_text))
+
+def _daily(target: date, label: str, *, remaining_only: bool = False) -> dict[str, Any]:
+    events = list_events_for_day(target)
+    if remaining_only:
+        now = _now()
+        events = [event for event in events if event.get("all_day") or (_event_datetime(event) and _event_datetime(event) >= now)]
+    overview = f"Absolutely, here’s your calendar for {label}."
+    if not events:
+        overview += " Looks clear, you have no events."
     else:
-        new_start = datetime.combine(new_date, current_start.time())
-
-    new_end = new_start + duration
-
-    updated = update_calendar_event(
-        event_id=event["id"],
-        title=new_title,
-        start_time=new_start.isoformat(),
-        end_time=new_end.isoformat(),
-        location=event.get("location"),
-        description=event.get("description"),
+        titles = ", ".join(event.get("title", "Untitled") for event in events)
+        overview += f" You have {len(events)} event{'s' if len(events) != 1 else ''}: {titles}."
+    return _calendar_response(
+        overview=overview,
+        presentation="day",
+        events=events,
+        label=label,
+        date=target.isoformat(),
     )
 
-    return _format_updated_response(updated)
 
-
-def _extract_title_query(text: str) -> str | None:
-    match = re.search(
-        r"\b(?:called|named|titled|title)\s+['\"]?(.+?)['\"]?(?=\s+(?:to|for|on|at|from|location|description)\b|$)",
-        text,
-        re.IGNORECASE,
+def _week(today: date) -> dict[str, Any]:
+    start = today - timedelta(days=(today.weekday() + 1) % 7)
+    days = []
+    all_events: list[dict[str, Any]] = []
+    for offset in range(7):
+        day = start + timedelta(days=offset)
+        events = list_events_for_day(day)
+        all_events.extend(events)
+        days.append({"date": day.isoformat(), "events": events, "event_count": len(events)})
+    busiest = max(days, key=lambda item: item["event_count"])
+    lightest = min(days, key=lambda item: item["event_count"])
+    overview = (
+        "Absolutely, here’s what your week looks like. "
+        f"Busiest day: {busiest['date']} with {busiest['event_count']} events. "
+        f"Lightest day: {lightest['date']} with {lightest['event_count']} events."
     )
-    if match:
-        return match.group(1).strip().lower()
-
-    return None
-
-
-def _find_matching_events(command: str) -> list[dict]:
-    target_date = _resolve_date_from_text(command)
-    events = list_events_for_day(target_date.isoformat())
-
-    title_query = _extract_title_query(command)
-
-    if title_query:
-        events = [
-            event for event in events
-            if title_query in event.get("title", "").lower()
-        ]
-
-    return events
+    return _calendar_response(
+        overview=overview,
+        presentation="week",
+        events=all_events,
+        week_start=start.isoformat(),
+        days=days,
+        summary={"busiest": busiest, "lightest": lightest},
+    )
 
 
-def _try_delete_event(command: str) -> str | None:
-    if not DELETE_RE.search(command):
+def handle_calendar_command(command: str) -> dict[str, Any] | None:
+    text = command.strip()
+    lowered = text.lower()
+    if DELETE_RE.search(text):
+        return _delete(text)
+    if UPDATE_RE.search(text):
+        return _update(text)
+    if CREATE_RE.search(text):
+        return _create(text)
+
+    calendar_terms = ("calendar", "schedule", "event", "meeting", "today", "tomorrow", "week", "month", "upcoming", "what's left", "whats left", "rest of today")
+    if not any(term in lowered for term in calendar_terms):
         return None
 
-    matches = _find_matching_events(command)
-
-    if not matches:
-        return "I could not find a matching event to delete."
-
-    if len(matches) > 1:
-        lines = "\n".join(
-            f"• {event.get('title', 'Untitled')} — {event.get('start')}"
-            for event in matches
-        )
-        return (
-            "I found multiple matching events. Please be more specific:\n"
-            f"{lines}"
-        )
-
-    event = matches[0]
-    delete_calendar_event(event["id"])
-
-    return f"Deleted event: {event.get('title', 'Untitled')}"
-
-
-def _try_update_event(command: str) -> str | None:
-    if not UPDATE_RE.search(command):
-        return None
-
-    matches = _find_matching_events(command)
-
-    if not matches:
-        return "I could not find a matching event to update."
-
-    if len(matches) > 1:
-        lines = "\n".join(
-            f"• {event.get('title', 'Untitled')} — {event.get('start')}"
-            for event in matches
-        )
-        return (
-            "I found multiple matching events. Please be more specific:\n"
-            f"{lines}"
-        )
-
-    event = matches[0]
-
-    current_start = parser.parse(event["start"])
-    current_end = parser.parse(event["end"])
-    current_duration = current_end - current_start
-
-    new_title = event.get("title", "Untitled")
-    title_match = TITLE_RE.search(command)
-    if title_match:
-        new_title = title_match.group(1).strip().strip('"“”').title()
-
-    try:
-        new_start, new_end, _ = _parse_event_window(command)
-    except Exception:
-        new_start = current_start.replace(tzinfo=None)
-        new_end = new_start + current_duration
-
-    if "to" in command.lower() and _has_time(command):
-        new_end = new_start + current_duration
-
-    updated = update_calendar_event(
-        event_id=event["id"],
-        title=new_title,
-        start_time=new_start.isoformat(),
-        end_time=new_end.isoformat(),
-        location=event.get("location"),
-        description=event.get("description"),
-    )
-
-    return (
-        f"Updated event: {updated.get('title', new_title)}\n"
-        f"When: {new_start.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}\n"
-        f"Ends: {new_end.strftime('%A, %B %d at %I:%M %p').replace(' 0', ' ')}"
-    )
-
-
-def handle_calendar_command(command: str) -> str | None:
-    text = command.lower().strip()
-    today = datetime.now().date()
-
-    delete_response = _try_delete_event(command)
-    if delete_response:
-        return delete_response
-
-    update_response = _try_update_event(command)
-    if update_response:
-        return update_response
-
-    create_response = _try_create_event(command)
-    if create_response:
-        return create_response
-
-    is_calendar_request = any(
-        word in text
-        for word in [
-            "calendar",
-            "schedule",
-            "event",
-            "events",
-            "meeting",
-            "meetings",
-            "plan",
-            "today",
-            "tomorrow",
-            "tommorow",
-            "tmrw",
-            "tmr",
-            "week",
-            "month",
-            "what's left",
-            "whats left",
-        ]
-    )
-
-    if not is_calendar_request:
-        return None
-
-    if "tomorrow" in text or "tommorow" in text or "tmrw" in text or "tmr" in text:
-        target = today + timedelta(days=1)
-
-        events = list_events_for_day(target.isoformat())
-        return _format_events("tomorrow", events)
-
-    if "today" in text or "what's left" in text or "whats left" in text:
-        events = list_events_for_day(today.isoformat())
-
-        if "left" in text:
-            now = datetime.now()
-            remaining = []
-
-            for event in events:
-                try:
-                    start = datetime.fromisoformat(
-                        event["start"].replace("Z", "+00:00")
-                    ).replace(tzinfo=None)
-
-                    if start >= now:
-                        remaining.append(event)
-                except Exception:
-                    remaining.append(event)
-
-            return _format_events("the rest of today", remaining)
-
-        return _format_events("today", events)
-
-    if "week" in text:
-        start = _start_of_week(today)
-        week_blocks = []
-        day_summaries = []
-
-        counts = []
-
-        for i in range(7):
-            day = start + timedelta(days=i)
-            events = list_events_for_day(day.isoformat())
-            count = len(events)
-            counts.append((day, count))
-
-            week_blocks.append(
-                f"• {day.isoformat()} — {count} event{'s' if count != 1 else ''}"
-            )
-
-            if count == 0:
-                week_blocks.append("  - No events")
-            else:
-                for event in events:
-                    week_blocks.append(f"  - {_format_event(event).replace('• ', '')}")
-
-        busiest_day, busiest_count = max(counts, key=lambda item: item[1])
-        lightest_day, lightest_count = min(counts, key=lambda item: item[1])
-
-        day_summaries = [
-            f"Busiest day: {busiest_day.isoformat()} with {busiest_count} events.",
-            f"Lightest day: {lightest_day.isoformat()} with {lightest_count} events.",
-        ]
-
-        top_blurb = (
-            "Absolutely, here's what your week looks like. "
-            + " ".join(day_summaries)
-        )
-
-        return (
-            f"{top_blurb}\n\n"
-            "Weekly Calendar Overview\n\n"
-            "This Week\n"
-            f"{chr(10).join(week_blocks)}\n\n"
-            "Summary\n"
-            f"{chr(10).join(f'• {item}' for item in day_summaries)}"
-        )
-
-    if "month" in text:
+    today = _now().date()
+    explicit = _explicit_date(text)
+    if explicit and not any(term in lowered for term in ("week", "month")):
+        label = "today" if explicit == today else "tomorrow" if explicit == today + timedelta(days=1) else explicit.strftime("%A, %B %d").replace(" 0", " ")
+        return _daily(explicit, label, remaining_only=("left" in lowered or "rest of today" in lowered))
+    if "week" in lowered:
+        return _week(today)
+    if "month" in lowered:
         start = today.replace(day=1)
-        next_month = start + relativedelta(months=1)
-        days = (next_month - today).days
-
-        events = list_upcoming_events(days=days, max_results=50)
-        return _format_events("this month", events)
-
-    if "upcoming" in text or "next" in text:
-        events = list_upcoming_events(days=7, max_results=10)
-        return _format_events("the next 7 days", events)
-
-    return None
+        end = start + relativedelta(months=1)
+        events = list_events_between(datetime.combine(start, time.min, tzinfo=LOCAL_TZ), datetime.combine(end, time.min, tzinfo=LOCAL_TZ))
+        return _calendar_response(
+            overview=f"Absolutely, here’s your calendar for this month. You have {len(events)} events.",
+            presentation="list", events=events, label="this month",
+        )
+    if "upcoming" in lowered or "next" in lowered:
+        events = list_upcoming_events(days=7, max_results=20)
+        return _calendar_response(
+            overview=f"Absolutely, here are your upcoming events. I found {len(events)}.",
+            presentation="list", events=events, label="next 7 days",
+        )
+    return _daily(today, "today", remaining_only=("left" in lowered or "rest of today" in lowered))
