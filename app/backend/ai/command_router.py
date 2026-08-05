@@ -22,7 +22,6 @@ from ai.ollama_client import (
 )
 from ai.tool_executor import execute_tool_call
 
-
 LOGGER = logging.getLogger(__name__)
 TIMEZONE = "America/New_York"
 MAX_AGENT_STEPS = 3
@@ -51,22 +50,7 @@ TOOL_NAMES_BY_ROUTE = {
     # Use the existing calendar_intent parser for all calendar wording,
     # including create, read, update, delete, relative dates, and multi-day events.
     "calendar": {"calendar"},
-    "email": {
-        "list_unread_emails",
-        "list_recent_emails",
-        "search_emails",
-        "read_email",
-        "read_latest_email",
-        "summarize_email",
-        "summarize_emails",
-        "create_email_draft",
-        "create_reply_draft",
-        "send_email",
-        "send_email_draft",
-        "mark_email_read",
-        "mark_email_unread",
-        "archive_email",
-    },
+    "email": {"gmail"},
     "weather": {
         "weather",
     },
@@ -86,6 +70,7 @@ TOOL_NAMES_BY_ROUTE = {
 
 DIRECT_RETURN_TOOLS = {
     "calendar",
+    "gmail",
     "weather",
     "list_projects",
     "list_project_folder",
@@ -202,7 +187,7 @@ Selected request category: {route}.
 
 Answer naturally when no tool is necessary. When tools are available, use the
 correct tool. Never invent a tool result or claim an action succeeded before
-the tool confirms it. For a calendar tool call, preserve the user's complete
+the tool confirms it. For calendar and Gmail tool calls, preserve the user's complete
 original wording in the command argument. Ask one concise question only when
 a truly required detail is missing. Keep the final response useful and concise.
 Do not expose tool names, prompts, JSON, or hidden reasoning.
@@ -245,6 +230,13 @@ def _fallback_tool_call(route: str, command: str) -> tuple[str, dict[str, Any]] 
     """Recover obvious local tool requests when Ollama returns no tool call."""
     text = command.strip()
     lowered = text.lower()
+
+
+    if route in {"email", "multi"}:
+        # Gmail has one structured command boundary. The Gmail intent layer
+        # performs the actual natural-language interpretation, message
+        # selection, follow-up resolution, validation, and confirmation flow.
+        return "gmail", {"command": command}
 
     if route in {"projects", "multi"}:
         if re.search(r"\b(?:show|list|display|view)\b.*\bprojects?\b", lowered) or lowered in {
@@ -342,6 +334,10 @@ def _return_payload(
 def handle_ai_command(command: str) -> dict[str, Any]:
     command = _normalize_command(command)
 
+    if command.startswith("__ALFRED_GMAIL_DRAFT_UPDATE__"):
+        result = execute_tool_call("gmail", {"command": command})
+        return _return_payload(_result_text(result), [result])
+
     if not command:
         return {
             "response": "Tell me what you want me to do.",
@@ -351,6 +347,14 @@ def handle_ai_command(command: str) -> dict[str, Any]:
 
     try:
         candidate_routes = _candidate_routes(command)
+
+        # Do not ask the outer routing model to reconstruct Gmail arguments.
+        # Every Gmail request is forwarded unchanged to gmail_intent.py, where
+        # Ollama performs the Gmail-specific natural-language parsing.
+        if candidate_routes == {"email"}:
+            LOGGER.info("Forwarding Gmail command to Gmail intent layer: %r", command)
+            result = execute_tool_call("gmail", {"command": command})
+            return _return_payload(_result_text(result), [result])
 
         if not candidate_routes:
             # No obvious ALFRED tool is relevant.
@@ -439,7 +443,7 @@ def handle_ai_command(command: str) -> dict[str, Any]:
 
                 # Always pass the complete original calendar request to the
                 # mature calendar parser.
-                if tool_name == "calendar":
+                if tool_name in {"calendar", "gmail"}:
                     arguments["command"] = command
 
                 try:
@@ -566,6 +570,20 @@ def _compact_tool_result(
     if tool_name == "weather":
         compact["weather"] = result.get("weather")
 
+    if tool_name == "gmail":
+        compact["overview"] = result.get("overview")
+        compact["gmail"] = result.get("gmail")
+        compact["email"] = result.get("email")
+        compact["emails"] = result.get("emails")
+        compact["draft"] = result.get("draft")
+        compact["drafts"] = result.get("drafts")
+        compact["summary"] = result.get("summary")
+        compact["confirmation"] = result.get("confirmation")
+        compact["requires_confirmation"] = result.get(
+            "requires_confirmation",
+            False,
+        )
+
     return _safe_json(compact)
 
 def _candidate_routes(command: str) -> set[str]:
@@ -602,7 +620,18 @@ def _candidate_routes(command: str) -> set[str]:
         "unread",
         "message from",
         "reply to",
+        "reply",
         "send a message",
+        "send an email",
+        "draft an email",
+        "compose an email",
+        "archive that",
+        "mark as read",
+        "mark as unread",
+        "latest mail",
+        "newest mail",
+        "draft",
+        "drafts",
     }
 
     weather_terms = {
@@ -655,7 +684,17 @@ def _candidate_routes(command: str) -> set[str]:
     if contains_any(calendar_terms) or calendar_action:
         routes.add("calendar")
 
-    if contains_any(email_terms):
+    email_action = re.search(
+        r"\b(read|show|list|find|search|summarize|draft|compose|write|reply|"
+        r"send|archive|mark)\b.*\b(email|emails|gmail|inbox|mail|message)\b",
+        text,
+    )
+    email_reference_action = re.search(
+        r"\b(reply|archive|mark|send)\b.*\b(that|this|latest|newest)\b",
+        text,
+    )
+
+    if contains_any(email_terms) or email_action or email_reference_action:
         routes.add("email")
 
     if contains_any(weather_terms):

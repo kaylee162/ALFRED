@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from typing import Any
 
 import requests
@@ -8,6 +10,7 @@ import requests
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:3b"
 DEFAULT_TIMEOUT = 60
+DEFAULT_CONNECT_TIMEOUT = 5
 
 LOGGER = logging.getLogger(__name__)
 
@@ -67,16 +70,23 @@ def chat_with_ollama(
     if response_format is not None:
         payload["format"] = response_format
 
+    started_at = time.perf_counter()
+
     try:
         response = requests.post(
             OLLAMA_URL,
             json=payload,
-            timeout=(5, timeout),
+            timeout=(DEFAULT_CONNECT_TIMEOUT, timeout),
         )
         response.raise_for_status()
 
     except requests.Timeout as exc:
-        LOGGER.warning("Ollama timed out after %s seconds", timeout)
+        elapsed = time.perf_counter() - started_at
+        LOGGER.warning(
+            "Ollama timed out after %.2f seconds for model %s",
+            elapsed,
+            MODEL,
+        )
         raise OllamaTimeoutError(
             f"Ollama did not respond within {timeout} seconds."
         ) from exc
@@ -90,8 +100,21 @@ def chat_with_ollama(
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         detail = exc.response.text if exc.response is not None else str(exc)
+        detail = detail[:1_000]
         LOGGER.error("Ollama returned HTTP %s: %s", status, detail)
-        raise OllamaError(f"Ollama returned an HTTP {status} error.") from exc
+
+        user_detail = ""
+        try:
+            parsed_detail = json.loads(detail)
+            if isinstance(parsed_detail, dict):
+                user_detail = str(parsed_detail.get("error") or "").strip()
+        except (json.JSONDecodeError, TypeError):
+            user_detail = ""
+
+        suffix = f": {user_detail}" if user_detail else "."
+        raise OllamaError(
+            f"Ollama returned an HTTP {status} error{suffix}"
+        ) from exc
 
     except requests.RequestException as exc:
         LOGGER.exception("Unexpected Ollama request failure")
@@ -108,6 +131,19 @@ def chat_with_ollama(
         LOGGER.error("Unexpected Ollama response: %s", data)
         raise OllamaError("Ollama returned an invalid response.")
 
+    elapsed = time.perf_counter() - started_at
+    LOGGER.info(
+        "OLLAMA TIMING total=%.2fs load=%.2fs prompt_eval=%.2fs "
+        "eval=%.2fs prompt_tokens=%s output_tokens=%s tools=%s",
+        elapsed,
+        float(data.get("load_duration", 0)) / 1_000_000_000,
+        float(data.get("prompt_eval_duration", 0)) / 1_000_000_000,
+        float(data.get("eval_duration", 0)) / 1_000_000_000,
+        data.get("prompt_eval_count", 0),
+        data.get("eval_count", 0),
+        bool(tools),
+    )
+
     content = message.get("content")
     tool_calls = message.get("tool_calls")
 
@@ -115,7 +151,49 @@ def chat_with_ollama(
         message["content"] = ""
 
     if tool_calls is not None and not isinstance(tool_calls, list):
+        LOGGER.warning("Ollama returned malformed tool_calls: %r", tool_calls)
         message["tool_calls"] = []
+    elif isinstance(tool_calls, list):
+        valid_calls: list[dict[str, Any]] = []
+
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
+
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    LOGGER.warning(
+                        "Ollama returned invalid arguments for tool %s",
+                        name,
+                    )
+                    arguments = {}
+
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            valid_calls.append(
+                {
+                    **call,
+                    "function": {
+                        **function,
+                        "name": name.strip(),
+                        "arguments": arguments,
+                    },
+                }
+            )
+
+        message["tool_calls"] = valid_calls
 
     if not message.get("content", "").strip() and not message.get("tool_calls"):
         raise OllamaError("Ollama returned an empty response.")
