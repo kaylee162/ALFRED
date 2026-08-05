@@ -2,22 +2,26 @@ from __future__ import annotations
 
 import base64
 import html
+import logging
 import re
+import threading
 from email.message import EmailMessage
+from email.utils import getaddresses, parseaddr
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 from googleapiclient.errors import HttpError
 
+LOGGER = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CREDENTIALS_PATH = BASE_DIR / "credentials.json"
 TOKEN_PATH = BASE_DIR / "token.json"
-
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.modify",
@@ -25,364 +29,319 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
-def get_gmail_service() -> Resource:
-    """
-    Authenticate with Google and return a Gmail API service.
+_SERVICE: Resource | None = None
+_SERVICE_LOCK = threading.Lock()
 
-    ALFRED shares credentials.json and token.json between Calendar and Gmail.
-    Delete token.json once after adding the Gmail scopes so Google can request
-    permission again.
-    """
+
+class GmailError(RuntimeError):
+    """Base Gmail integration error safe for the intent layer to catch."""
+
+
+class GmailAuthError(GmailError):
+    pass
+
+
+class GmailNotFoundError(GmailError):
+    pass
+
+
+class GmailValidationError(GmailError):
+    pass
+
+
+def _http_error_message(exc: HttpError) -> str:
+    status = getattr(exc.resp, "status", None)
+    if status == 401:
+        return "Gmail authorization expired. Delete token.json and reconnect Google."
+    if status == 403:
+        return "Google denied this Gmail action. Check the enabled Gmail API and OAuth scopes."
+    if status == 404:
+        return "That Gmail message or draft no longer exists."
+    if status == 429:
+        return "Gmail is temporarily rate-limiting ALFRED. Try again shortly."
+    if status and status >= 500:
+        return "Gmail is temporarily unavailable. No changes were made."
+    return "Gmail could not complete that request."
+
+
+def _load_credentials() -> Credentials:
     creds: Credentials | None = None
-
     if TOKEN_PATH.exists():
         try:
-            creds = Credentials.from_authorized_user_file(
-                str(TOKEN_PATH),
-                SCOPES,
-            )
-        except (ValueError, OSError):
-            # A malformed or outdated token should not crash ALFRED.
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        except (ValueError, OSError) as exc:
+            LOGGER.warning("Ignoring invalid token.json: %s", exc)
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            LOGGER.warning("Google token refresh failed: %s", exc)
             creds = None
 
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                # Refresh may fail when scopes changed or access was revoked.
-                creds = None
-
-        if not creds:
-            if not CREDENTIALS_PATH.exists():
-                raise FileNotFoundError(
-                    "Missing credentials.json. Place it in the backend folder."
-                )
-
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(CREDENTIALS_PATH),
-                SCOPES,
+        if not CREDENTIALS_PATH.exists():
+            raise GmailAuthError(
+                "Missing credentials.json in the backend folder. Add it, then reconnect Google."
             )
-            creds = flow.run_local_server(port=0)
+        try:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(CREDENTIALS_PATH), SCOPES
+            )
+            creds = flow.run_local_server(port=0, open_browser=True)
+        except Exception as exc:
+            raise GmailAuthError(
+                "Google sign-in could not be completed. Check credentials.json and retry."
+            ) from exc
 
-        TOKEN_PATH.write_text(
-            creds.to_json(),
-            encoding="utf-8",
-        )
+        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
 
-    return build(
-        "gmail",
-        "v1",
-        credentials=creds,
-        cache_discovery=False,
-    )
+    return creds
 
 
-def _decode_base64url(data: str | None) -> str:
-    """
-    Decode Gmail's URL-safe base64 content.
-    """
-    if not data:
-        return ""
+def get_gmail_service(*, force_rebuild: bool = False) -> Resource:
+    global _SERVICE
+    with _SERVICE_LOCK:
+        if _SERVICE is None or force_rebuild:
+            _SERVICE = build(
+                "gmail",
+                "v1",
+                credentials=_load_credentials(),
+                cache_discovery=False,
+            )
+        return _SERVICE
+
+
+def gmail_health() -> dict[str, Any]:
+    global _SERVICE
+
+    creds = _load_existing_credentials()
+
+    if not creds:
+        return {
+            "connected": False,
+            "requires_authentication": True,
+            "error": (
+                "Gmail is not authenticated. Run a Gmail command "
+                "or use the reconnect endpoint."
+            ),
+        }
 
     try:
-        padding = "=" * (-len(data) % 4)
-        decoded = base64.urlsafe_b64decode(data + padding)
-        return decoded.decode("utf-8", errors="replace")
-    except (ValueError, UnicodeDecodeError):
+        with _SERVICE_LOCK:
+            if _SERVICE is None:
+                _SERVICE = build(
+                    "gmail",
+                    "v1",
+                    credentials=creds,
+                    cache_discovery=False,
+                )
+
+            service = _SERVICE
+
+        profile = (
+            service.users()
+            .getProfile(userId="me")
+            .execute()
+        )
+
+        return {
+            "connected": True,
+            "requires_authentication": False,
+            "email": profile.get("emailAddress"),
+            "messages_total": profile.get("messagesTotal"),
+        }
+
+    except HttpError as exc:
+        LOGGER.warning("Gmail health check failed: %s", exc)
+
+        return {
+            "connected": False,
+            "requires_authentication": True,
+            "error": _http_error_message(exc),
+        }
+
+    except Exception as exc:
+        LOGGER.exception("Unexpected Gmail health-check failure")
+
+        return {
+            "connected": False,
+            "requires_authentication": False,
+            "error": f"Gmail health check failed: {exc}",
+        }
+    
+def _load_existing_credentials() -> Credentials | None:
+    if not TOKEN_PATH.exists():
+        return None
+
+    try:
+        creds = Credentials.from_authorized_user_file(
+            str(TOKEN_PATH),
+            SCOPES,
+        )
+    except (ValueError, OSError) as exc:
+        LOGGER.warning("Could not load token.json: %s", exc)
+        return None
+
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            TOKEN_PATH.write_text(
+                creds.to_json(),
+                encoding="utf-8",
+            )
+        except RefreshError as exc:
+            LOGGER.warning("Google token refresh failed: %s", exc)
+            return None
+
+    return creds if creds.valid else None
+
+def _decode_base64url(data: str | None) -> str:
+    if not data:
+        return ""
+    try:
+        padded = data + "=" * (-len(data) % 4)
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    except Exception:
         return ""
 
 
 def _strip_html(value: str) -> str:
-    """
-    Convert a basic HTML email body into readable plain text.
-    """
     if not value:
         return ""
-
-    value = re.sub(
-        r"<(script|style).*?>.*?</\1>",
-        "",
-        value,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
-    value = re.sub(r"</p\s*>", "\n\n", value, flags=re.IGNORECASE)
+    value = re.sub(r"<(script|style).*?>.*?</\1>", "", value, flags=re.I | re.S)
+    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
+    value = re.sub(r"</p\s*>", "\n\n", value, flags=re.I)
     value = re.sub(r"<[^>]+>", "", value)
     value = html.unescape(value)
-
-    lines = [line.strip() for line in value.splitlines()]
-    return "\n".join(line for line in lines if line).strip()
+    return "\n".join(line.strip() for line in value.splitlines() if line.strip())
 
 
-def _get_header(
-    payload: dict[str, Any],
-    header_name: str,
-) -> str:
-    """
-    Read one RFC email header from a Gmail payload.
-    """
-    headers = payload.get("headers", [])
-
-    for header in headers:
-        if header.get("name", "").lower() == header_name.lower():
-            return header.get("value", "")
-
+def _header(payload: dict[str, Any], name: str) -> str:
+    for item in payload.get("headers", []) or []:
+        if str(item.get("name", "")).lower() == name.lower():
+            return str(item.get("value") or "")
     return ""
 
 
-def _extract_body_from_part(
-    part: dict[str, Any],
-) -> tuple[str, str]:
-    """
-    Recursively inspect a Gmail MIME message.
-
-    Returns:
-        A tuple of (plain_text_body, html_body).
-    """
-    mime_type = part.get("mimeType", "")
-    body_data = part.get("body", {}).get("data")
-
-    plain_text = ""
-    html_text = ""
-
-    if mime_type == "text/plain" and body_data:
-        plain_text = _decode_base64url(body_data)
-
-    elif mime_type == "text/html" and body_data:
-        html_text = _decode_base64url(body_data)
-
+def _extract_body(part: dict[str, Any]) -> tuple[str, str]:
+    mime = str(part.get("mimeType") or "")
+    data = (part.get("body") or {}).get("data")
+    plain = _decode_base64url(data) if mime == "text/plain" else ""
+    rich = _decode_base64url(data) if mime == "text/html" else ""
     for child in part.get("parts", []) or []:
-        child_plain, child_html = _extract_body_from_part(child)
-
-        if child_plain and not plain_text:
-            plain_text = child_plain
-
-        if child_html and not html_text:
-            html_text = child_html
-
-    return plain_text, html_text
+        child_plain, child_rich = _extract_body(child)
+        if child_plain and not plain:
+            plain = child_plain
+        if child_rich and not rich:
+            rich = child_rich
+    return plain, rich
 
 
-def _message_to_dict(
-    message: dict[str, Any],
-    include_body: bool = True,
-) -> dict[str, Any]:
-    """
-    Normalize a Gmail API message into a simpler ALFRED-friendly dictionary.
-    """
-    payload = message.get("payload", {})
-
-    plain_body = ""
-    html_body = ""
-
+def _normalize_message(message: dict[str, Any], *, include_body: bool) -> dict[str, Any]:
+    payload = message.get("payload") or {}
+    body = ""
     if include_body:
-        plain_body, html_body = _extract_body_from_part(payload)
-
-        # Some simple emails store their content directly on the top payload.
-        if not plain_body and not html_body:
-            mime_type = payload.get("mimeType", "")
-            body_data = payload.get("body", {}).get("data")
-
-            if mime_type == "text/plain":
-                plain_body = _decode_base64url(body_data)
-            elif mime_type == "text/html":
-                html_body = _decode_base64url(body_data)
-
-    body = plain_body.strip()
-
-    if not body and html_body:
-        body = _strip_html(html_body)
-
+        plain, rich = _extract_body(payload)
+        body = plain.strip() or _strip_html(rich)
     if not body:
-        body = message.get("snippet", "").strip()
+        body = str(message.get("snippet") or "").strip()
 
-    label_ids = message.get("labelIds", [])
-
+    labels = list(message.get("labelIds") or [])
+    sender_name, sender_email = parseaddr(_header(payload, "From"))
     return {
         "id": message.get("id"),
         "thread_id": message.get("threadId"),
-        "from": _get_header(payload, "From"),
-        "to": _get_header(payload, "To"),
-        "cc": _get_header(payload, "Cc"),
-        "subject": _get_header(payload, "Subject") or "(No subject)",
-        "date": _get_header(payload, "Date"),
-        "message_id_header": _get_header(payload, "Message-ID"),
-        "references": _get_header(payload, "References"),
-        "snippet": message.get("snippet", ""),
+        "from": _header(payload, "From"),
+        "from_name": sender_name,
+        "from_email": sender_email,
+        "to": _header(payload, "To"),
+        "cc": _header(payload, "Cc"),
+        "subject": _header(payload, "Subject") or "(No subject)",
+        "date": _header(payload, "Date"),
+        "internal_date": int(message.get("internalDate") or 0),
+        "message_id_header": _header(payload, "Message-ID"),
+        "references": _header(payload, "References"),
+        "snippet": str(message.get("snippet") or ""),
         "body": body,
-        "labels": label_ids,
-        "is_unread": "UNREAD" in label_ids,
-        "is_starred": "STARRED" in label_ids,
+        "labels": labels,
+        "is_unread": "UNREAD" in labels,
+        "is_starred": "STARRED" in labels,
     }
 
 
-def get_email(
-    message_id: str,
-    mark_as_read: bool = False,
-) -> dict[str, Any]:
-    """
-    Retrieve one complete email by Gmail message ID.
-    """
+def get_email(message_id: str, *, mark_as_read: bool = False) -> dict[str, Any]:
     if not message_id:
-        raise ValueError("A Gmail message ID is required.")
-
+        raise GmailValidationError("A Gmail message ID is required.")
     service = get_gmail_service()
-
     try:
         message = (
-            service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=message_id,
-                format="full",
-            )
-            .execute()
+            service.users().messages().get(userId="me", id=message_id, format="full").execute()
         )
-
-        if mark_as_read and "UNREAD" in message.get("labelIds", []):
-            service.users().messages().modify(
-                userId="me",
-                id=message_id,
-                body={"removeLabelIds": ["UNREAD"]},
-            ).execute()
-
-            message["labelIds"] = [
-                label
-                for label in message.get("labelIds", [])
-                if label != "UNREAD"
-            ]
-
-        return _message_to_dict(message, include_body=True)
-
+        if mark_as_read and "UNREAD" in (message.get("labelIds") or []):
+            modify_labels(message_id, remove_labels=["UNREAD"])
+            message["labelIds"] = [x for x in message.get("labelIds", []) if x != "UNREAD"]
+        return _normalize_message(message, include_body=True)
     except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not read message {message_id}: {exc}"
-        ) from exc
+        if getattr(exc.resp, "status", None) == 404:
+            raise GmailNotFoundError(_http_error_message(exc)) from exc
+        raise GmailError(_http_error_message(exc)) from exc
 
 
 def search_emails(
     query: str = "in:inbox",
+    *,
     max_results: int = 10,
     include_body: bool = False,
 ) -> list[dict[str, Any]]:
-    """
-    Search Gmail using standard Gmail search syntax.
-
-    Examples:
-        is:unread
-        from:person@example.com
-        subject:invoice
-        newer_than:7d
-        has:attachment
-        in:inbox is:unread
-    """
-    max_results = max(1, min(max_results, 50))
-    query = query.strip() or "in:inbox"
-
+    query = (query or "in:inbox").strip()
+    max_results = max(1, min(int(max_results), 50))
     service = get_gmail_service()
-
     try:
-        result = (
-            service.users()
-            .messages()
-            .list(
-                userId="me",
-                q=query,
-                maxResults=max_results,
-            )
-            .execute()
+        listing = (
+            service.users().messages().list(
+                userId="me", q=query, maxResults=max_results
+            ).execute()
         )
-
-        message_refs = result.get("messages", [])
         emails: list[dict[str, Any]] = []
-
-        for message_ref in message_refs:
-            message = (
-                service.users()
-                .messages()
-                .get(
-                    userId="me",
-                    id=message_ref["id"],
-                    format="full" if include_body else "metadata",
-                    metadataHeaders=[
-                        "From",
-                        "To",
-                        "Cc",
-                        "Subject",
-                        "Date",
-                        "Message-ID",
-                        "References",
-                    ],
-                )
-                .execute()
-            )
-
-            emails.append(
-                _message_to_dict(
-                    message,
-                    include_body=include_body,
-                )
-            )
-
+        for ref in listing.get("messages", []) or []:
+            kwargs: dict[str, Any] = {
+                "userId": "me",
+                "id": ref["id"],
+                "format": "full" if include_body else "metadata",
+            }
+            if not include_body:
+                kwargs["metadataHeaders"] = [
+                    "From", "To", "Cc", "Subject", "Date", "Message-ID", "References"
+                ]
+            message = service.users().messages().get(**kwargs).execute()
+            emails.append(_normalize_message(message, include_body=include_body))
+        emails.sort(key=lambda item: item.get("internal_date", 0), reverse=True)
         return emails
-
     except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail search failed: {exc}"
-        ) from exc
+        raise GmailError(_http_error_message(exc)) from exc
 
 
-def list_recent_emails(
-    max_results: int = 10,
-) -> list[dict[str, Any]]:
-    """
-    Return recent inbox messages.
-    """
-    return search_emails(
-        query="in:inbox",
-        max_results=max_results,
-        include_body=False,
-    )
+def get_latest_email(query: str = "in:inbox", *, mark_as_read: bool = False) -> dict[str, Any] | None:
+    matches = search_emails(query, max_results=1)
+    return get_email(matches[0]["id"], mark_as_read=mark_as_read) if matches else None
 
 
-def list_unread_emails(
-    max_results: int = 10,
-) -> list[dict[str, Any]]:
-    """
-    Return unread inbox messages.
-    """
-    return search_emails(
-        query="in:inbox is:unread",
-        max_results=max_results,
-        include_body=False,
-    )
-
-
-def get_latest_email(
-    query: str = "in:inbox",
-    mark_as_read: bool = False,
-) -> dict[str, Any] | None:
-    """
-    Find and retrieve the newest message matching a Gmail query.
-    """
-    emails = search_emails(
-        query=query,
-        max_results=1,
-        include_body=False,
-    )
-
-    if not emails:
+def _validate_addresses(value: str | None, field: str, *, required: bool = False) -> str | None:
+    value = (value or "").strip()
+    if not value:
+        if required:
+            raise GmailValidationError(f"{field} is required.")
         return None
+    parsed = getaddresses([value])
+    invalid = [address for _, address in parsed if "@" not in address]
+    if not parsed or invalid:
+        raise GmailValidationError(f"{field} contains an invalid email address.")
+    return value
 
-    return get_email(
-        emails[0]["id"],
-        mark_as_read=mark_as_read,
-    )
 
-
-def _build_mime_message(
+def _build_message(
+    *,
     to: str,
     subject: str,
     body: str,
@@ -392,325 +351,217 @@ def _build_mime_message(
     in_reply_to: str | None = None,
     references: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Build a URL-safe RFC 2822 MIME message for the Gmail API.
-    """
-    if not to.strip():
-        raise ValueError("The recipient email address is required.")
-
-    if not subject.strip():
-        raise ValueError("The email subject is required.")
-
-    if not body.strip():
-        raise ValueError("The email body is required.")
+    to = _validate_addresses(to, "Recipient", required=True) or ""
+    cc = _validate_addresses(cc, "CC")
+    bcc = _validate_addresses(bcc, "BCC")
+    subject = (subject or "").strip()
+    body = (body or "").strip()
+    if not subject:
+        raise GmailValidationError("Subject is required.")
+    if not body:
+        raise GmailValidationError("Email body is required.")
 
     message = EmailMessage()
-    message["To"] = to.strip()
-    message["Subject"] = subject.strip()
-
-    if cc and cc.strip():
-        message["Cc"] = cc.strip()
-
-    if bcc and bcc.strip():
-        message["Bcc"] = bcc.strip()
-
+    message["To"] = to
+    message["Subject"] = subject
+    if cc:
+        message["Cc"] = cc
+    if bcc:
+        message["Bcc"] = bcc
     if in_reply_to:
         message["In-Reply-To"] = in_reply_to
-
     if references:
         message["References"] = references
+    message.set_content(body)
+    result: dict[str, Any] = {
+        "raw": base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+    }
+    if thread_id:
+        result["threadId"] = thread_id
+    return result
 
-    message.set_content(body.strip())
 
-    encoded_message = base64.urlsafe_b64encode(
-        message.as_bytes()
-    ).decode("utf-8")
 
-    gmail_message: dict[str, Any] = {
-        "raw": encoded_message,
+def _normalize_draft(draft: dict[str, Any], *, include_body: bool = True) -> dict[str, Any]:
+    message = draft.get("message") or {}
+    normalized = _normalize_message(message, include_body=include_body)
+    return {
+        **normalized,
+        "draft_id": draft.get("id"),
+        "is_draft": True,
     }
 
-    if thread_id:
-        gmail_message["threadId"] = thread_id
 
-    return gmail_message
-
-
-def create_email_draft(
-    to: str,
-    subject: str,
-    body: str,
-    cc: str | None = None,
-    bcc: str | None = None,
-) -> dict[str, Any]:
-    """
-    Create a Gmail draft without sending it.
-    """
-    service = get_gmail_service()
-
-    message_body = _build_mime_message(
-        to=to,
-        subject=subject,
-        body=body,
-        cc=cc,
-        bcc=bcc,
-    )
-
-    try:
-        draft = (
-            service.users()
-            .drafts()
-            .create(
-                userId="me",
-                body={"message": message_body},
-            )
-            .execute()
-        )
-
-        return {
-            "success": True,
-            "draft_id": draft.get("id"),
-            "message_id": draft.get("message", {}).get("id"),
-            "thread_id": draft.get("message", {}).get("threadId"),
-            "to": to,
-            "cc": cc,
-            "bcc": bcc,
-            "subject": subject,
-            "body": body,
-        }
-
-    except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not create the draft: {exc}"
-        ) from exc
-
-
-def create_reply_draft(
-    message_id: str,
-    body: str,
-) -> dict[str, Any]:
-    """
-    Create a reply draft in the same Gmail conversation.
-    """
-    original = get_email(message_id)
-
-    original_subject = original.get("subject", "(No subject)")
-    reply_subject = (
-        original_subject
-        if original_subject.lower().startswith("re:")
-        else f"Re: {original_subject}"
-    )
-
-    original_message_header = original.get("message_id_header", "")
-    original_references = original.get("references", "").strip()
-
-    if original_message_header:
-        references = (
-            f"{original_references} {original_message_header}".strip()
-        )
-    else:
-        references = original_references
-
-    message_body = _build_mime_message(
-        to=original.get("from", ""),
-        subject=reply_subject,
-        body=body,
-        thread_id=original.get("thread_id"),
-        in_reply_to=original_message_header or None,
-        references=references or None,
-    )
-
-    service = get_gmail_service()
-
-    try:
-        draft = (
-            service.users()
-            .drafts()
-            .create(
-                userId="me",
-                body={"message": message_body},
-            )
-            .execute()
-        )
-
-        return {
-            "success": True,
-            "draft_id": draft.get("id"),
-            "message_id": draft.get("message", {}).get("id"),
-            "thread_id": draft.get("message", {}).get("threadId"),
-            "reply_to_message_id": message_id,
-            "to": original.get("from", ""),
-            "subject": reply_subject,
-            "body": body,
-        }
-
-    except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not create the reply draft: {exc}"
-        ) from exc
-
-
-def send_email(
-    to: str,
-    subject: str,
-    body: str,
-    cc: str | None = None,
-    bcc: str | None = None,
-) -> dict[str, Any]:
-    """
-    Send an email immediately.
-
-    ALFRED should only call this after the user explicitly asks to send.
-    Normal writing requests should call create_email_draft instead.
-    """
-    service = get_gmail_service()
-
-    message_body = _build_mime_message(
-        to=to,
-        subject=subject,
-        body=body,
-        cc=cc,
-        bcc=bcc,
-    )
-
-    try:
-        sent = (
-            service.users()
-            .messages()
-            .send(
-                userId="me",
-                body=message_body,
-            )
-            .execute()
-        )
-
-        return {
-            "success": True,
-            "message_id": sent.get("id"),
-            "thread_id": sent.get("threadId"),
-            "to": to,
-            "cc": cc,
-            "bcc": bcc,
-            "subject": subject,
-        }
-
-    except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not send the email: {exc}"
-        ) from exc
-
-
-def send_draft(
-    draft_id: str,
-) -> dict[str, Any]:
-    """
-    Send an existing Gmail draft.
-    """
+def get_draft(draft_id: str) -> dict[str, Any]:
     if not draft_id:
-        raise ValueError("A Gmail draft ID is required.")
-
-    service = get_gmail_service()
-
+        raise GmailValidationError("A Gmail draft ID is required.")
     try:
-        sent = (
-            service.users()
-            .drafts()
-            .send(
-                userId="me",
-                body={"id": draft_id},
-            )
-            .execute()
-        )
+        draft = get_gmail_service().users().drafts().get(
+            userId="me", id=draft_id, format="full"
+        ).execute()
+        return _normalize_draft(draft, include_body=True)
+    except HttpError as exc:
+        if getattr(exc.resp, "status", None) == 404:
+            raise GmailNotFoundError(_http_error_message(exc)) from exc
+        raise GmailError(_http_error_message(exc)) from exc
 
+
+def search_drafts(query: str = "", *, max_results: int = 10) -> list[dict[str, Any]]:
+    query = (query or "").strip()
+    max_results = max(1, min(int(max_results), 50))
+    service = get_gmail_service()
+    try:
+        listing = service.users().drafts().list(
+            userId="me", q=query or None, maxResults=max_results
+        ).execute()
+        drafts = [get_draft(str(ref.get("id") or "")) for ref in listing.get("drafts", []) or []]
+        drafts.sort(key=lambda item: item.get("internal_date", 0), reverse=True)
+        return drafts
+    except HttpError as exc:
+        raise GmailError(_http_error_message(exc)) from exc
+
+
+def update_draft(
+    draft_id: str,
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    cc: str | None = None,
+    bcc: str | None = None,
+) -> dict[str, Any]:
+    if not draft_id:
+        raise GmailValidationError("A Gmail draft ID is required.")
+    existing = get_draft(draft_id)
+    raw = _build_message(
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        bcc=bcc,
+        thread_id=str(existing.get("thread_id") or "") or None,
+    )
+    try:
+        updated = get_gmail_service().users().drafts().update(
+            userId="me",
+            id=draft_id,
+            body={"id": draft_id, "message": raw},
+        ).execute()
         return {
             "success": True,
-            "draft_id": draft_id,
-            "message_id": sent.get("id"),
-            "thread_id": sent.get("threadId"),
+            "draft_id": updated.get("id") or draft_id,
+            "message_id": (updated.get("message") or {}).get("id"),
+            "thread_id": (updated.get("message") or {}).get("threadId"),
+            "to": to,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "body": body,
+            "is_draft": True,
         }
-
     except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not send the draft: {exc}"
-        ) from exc
+        raise GmailError(_http_error_message(exc)) from exc
 
-
-def mark_email_read(
-    message_id: str,
-) -> dict[str, Any]:
-    """
-    Remove Gmail's UNREAD label from a message.
-    """
-    service = get_gmail_service()
-
+def create_email_draft(*, to: str, subject: str, body: str, cc: str | None = None, bcc: str | None = None) -> dict[str, Any]:
+    raw = _build_message(to=to, subject=subject, body=body, cc=cc, bcc=bcc)
     try:
-        service.users().messages().modify(
+        draft = get_gmail_service().users().drafts().create(
+            userId="me", body={"message": raw}
+        ).execute()
+        return {
+            "success": True,
+            "draft_id": draft.get("id"),
+            "message_id": (draft.get("message") or {}).get("id"),
+            "thread_id": (draft.get("message") or {}).get("threadId"),
+            "to": to, "cc": cc, "bcc": bcc, "subject": subject, "body": body,
+        }
+    except HttpError as exc:
+        raise GmailError(_http_error_message(exc)) from exc
+
+
+def create_reply_draft(*, message_id: str, body: str) -> dict[str, Any]:
+    original = get_email(message_id)
+    subject = str(original.get("subject") or "(No subject)")
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+    header_id = str(original.get("message_id_header") or "")
+    refs = " ".join(x for x in [str(original.get("references") or "").strip(), header_id] if x)
+    raw = _build_message(
+        to=str(original.get("from_email") or original.get("from") or ""),
+        subject=subject,
+        body=body,
+        thread_id=str(original.get("thread_id") or "") or None,
+        in_reply_to=header_id or None,
+        references=refs or None,
+    )
+    try:
+        draft = get_gmail_service().users().drafts().create(
+            userId="me", body={"message": raw}
+        ).execute()
+        return {
+            "success": True,
+            "draft_id": draft.get("id"),
+            "message_id": (draft.get("message") or {}).get("id"),
+            "thread_id": (draft.get("message") or {}).get("threadId"),
+            "reply_to_message_id": message_id,
+            "to": original.get("from"),
+            "subject": subject,
+            "body": body,
+        }
+    except HttpError as exc:
+        raise GmailError(_http_error_message(exc)) from exc
+
+
+def send_email(*, to: str, subject: str, body: str, cc: str | None = None, bcc: str | None = None) -> dict[str, Any]:
+    raw = _build_message(to=to, subject=subject, body=body, cc=cc, bcc=bcc)
+    try:
+        sent = get_gmail_service().users().messages().send(userId="me", body=raw).execute()
+        return {
+            "success": True, "message_id": sent.get("id"),
+            "thread_id": sent.get("threadId"), "to": to,
+            "cc": cc, "bcc": bcc, "subject": subject,
+        }
+    except HttpError as exc:
+        raise GmailError(_http_error_message(exc)) from exc
+
+
+def send_draft(draft_id: str) -> dict[str, Any]:
+    if not draft_id:
+        raise GmailValidationError("A Gmail draft ID is required.")
+    try:
+        sent = get_gmail_service().users().drafts().send(
+            userId="me", body={"id": draft_id}
+        ).execute()
+        return {
+            "success": True, "draft_id": draft_id,
+            "message_id": sent.get("id"), "thread_id": sent.get("threadId"),
+        }
+    except HttpError as exc:
+        raise GmailError(_http_error_message(exc)) from exc
+
+
+def modify_labels(message_id: str, *, add_labels: Iterable[str] = (), remove_labels: Iterable[str] = ()) -> dict[str, Any]:
+    if not message_id:
+        raise GmailValidationError("A Gmail message ID is required.")
+    try:
+        result = get_gmail_service().users().messages().modify(
             userId="me",
             id=message_id,
-            body={"removeLabelIds": ["UNREAD"]},
+            body={"addLabelIds": list(add_labels), "removeLabelIds": list(remove_labels)},
         ).execute()
-
-        return {
-            "success": True,
-            "message_id": message_id,
-            "is_unread": False,
-        }
-
+        return {"success": True, "message_id": message_id, "labels": result.get("labelIds", [])}
     except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not mark the email as read: {exc}"
-        ) from exc
+        raise GmailError(_http_error_message(exc)) from exc
 
 
-def mark_email_unread(
-    message_id: str,
-) -> dict[str, Any]:
-    """
-    Add Gmail's UNREAD label to a message.
-    """
-    service = get_gmail_service()
-
-    try:
-        service.users().messages().modify(
-            userId="me",
-            id=message_id,
-            body={"addLabelIds": ["UNREAD"]},
-        ).execute()
-
-        return {
-            "success": True,
-            "message_id": message_id,
-            "is_unread": True,
-        }
-
-    except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not mark the email as unread: {exc}"
-        ) from exc
+def mark_email_read(message_id: str) -> dict[str, Any]:
+    return modify_labels(message_id, remove_labels=["UNREAD"])
 
 
-def archive_email(
-    message_id: str,
-) -> dict[str, Any]:
-    """
-    Archive an email by removing the INBOX label.
-    """
-    service = get_gmail_service()
+def mark_email_unread(message_id: str) -> dict[str, Any]:
+    return modify_labels(message_id, add_labels=["UNREAD"])
 
-    try:
-        service.users().messages().modify(
-            userId="me",
-            id=message_id,
-            body={"removeLabelIds": ["INBOX"]},
-        ).execute()
 
-        return {
-            "success": True,
-            "message_id": message_id,
-            "archived": True,
-        }
-
-    except HttpError as exc:
-        raise RuntimeError(
-            f"Gmail could not archive the email: {exc}"
-        ) from exc
+def archive_email(message_id: str) -> dict[str, Any]:
+    result = modify_labels(message_id, remove_labels=["INBOX"])
+    return {**result, "archived": True}

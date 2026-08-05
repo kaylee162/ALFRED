@@ -143,8 +143,30 @@ type EmailDraft = {
   draft_id?: string;
   message_id?: string;
   to?: string;
+  cc?: string;
+  bcc?: string;
+  date?: string;
+  is_draft?: boolean;
   subject?: string;
   body?: string;
+};
+
+type EmailConfirmation = {
+  token: string;
+  action: "send" | "send_draft" | "archive";
+  title?: string;
+  confirm_label?: string;
+  cancel_label?: string;
+  note?: string;
+  preview: {
+    to?: string;
+    cc?: string;
+    bcc?: string;
+    subject?: string;
+    body?: string;
+    from?: string;
+    draft_id?: string;
+  };
 };
 
 type EmailResponseData = {
@@ -153,8 +175,14 @@ type EmailResponseData = {
     | "email_list"
     | "email_summary"
     | "email_draft"
+    | "email_drafts"
     | "email_sent"
-    | "email_updated";
+    | "email_updated"
+    | "email_confirmation"
+    | "email_missing_fields"
+    | "email_cancelled"
+    | "email_error"
+    | "email_help";
 
   overview: string;
   message: string;
@@ -162,6 +190,9 @@ type EmailResponseData = {
   email?: EmailItem | null;
   emails?: EmailItem[];
   draft?: EmailDraft | null;
+  drafts?: EmailDraft[];
+  confirmation?: EmailConfirmation | null;
+  missing_fields?: string[];
 };
 
 function getGreeting() {
@@ -1025,147 +1056,187 @@ function EmailBriefing({
   );
 }
 
+function EmailDraftEditor({
+  draft,
+  title,
+  onSave,
+  onReviewSend,
+}: {
+  draft: EmailDraft;
+  title: string;
+  onSave?: (draft: EmailDraft) => Promise<void>;
+  onReviewSend?: (draft: EmailDraft) => Promise<void>;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [to, setTo] = useState(draft.to || "");
+  const [cc, setCc] = useState(draft.cc || "");
+  const [bcc, setBcc] = useState(draft.bcc || "");
+  const [subject, setSubject] = useState(draft.subject || "");
+  const [body, setBody] = useState(draft.body || "");
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    setTo(draft.to || "");
+    setCc(draft.cc || "");
+    setBcc(draft.bcc || "");
+    setSubject(draft.subject || "");
+    setBody(draft.body || "");
+  }, [draft]);
+
+  const editedDraft: EmailDraft = {
+    ...draft,
+    to,
+    cc,
+    bcc,
+    subject,
+    body,
+  };
+
+  async function save() {
+    if (!onSave) return;
+    setStatus("Saving changes...");
+    try {
+      await onSave(editedDraft);
+      setStatus("Changes saved to Gmail.");
+      setIsEditing(false);
+    } catch (error: any) {
+      setStatus(error?.message || "I couldn’t save those changes.");
+    }
+  }
+
+  return (
+    <article className="email-compose-card">
+      <div className="email-compose-toolbar">
+        <div>
+          <p className="panel-label">saved draft</p>
+          <h3>{title}</h3>
+        </div>
+        <button
+          type="button"
+          className="email-send-secondary"
+          onClick={() => setIsEditing((value) => !value)}
+        >
+          {isEditing ? "Close editor" : "Edit details"}
+        </button>
+      </div>
+
+      <div className="email-compose-fields">
+        <label>
+          <span>To</span>
+          <input value={to} onChange={(event) => setTo(event.target.value)} disabled={!isEditing} />
+        </label>
+        <label>
+          <span>CC</span>
+          <input value={cc} onChange={(event) => setCc(event.target.value)} disabled={!isEditing} placeholder="Optional" />
+        </label>
+        <label>
+          <span>BCC</span>
+          <input value={bcc} onChange={(event) => setBcc(event.target.value)} disabled={!isEditing} placeholder="Optional" />
+        </label>
+        <label className="email-compose-subject">
+          <span>Subject</span>
+          <input value={subject} onChange={(event) => setSubject(event.target.value)} disabled={!isEditing} />
+        </label>
+        <label className="email-compose-body">
+          <span>Message</span>
+          <textarea value={body} onChange={(event) => setBody(event.target.value)} disabled={!isEditing} rows={9} />
+        </label>
+      </div>
+
+      {status && <p className="email-compose-status">{status}</p>}
+
+      <div className="email-compose-actions">
+        {isEditing && (
+          <button type="button" className="email-send-secondary" onClick={save}>
+            Save changes
+          </button>
+        )}
+        <button
+          type="button"
+          className="email-send-primary"
+          onClick={() => onReviewSend?.(editedDraft)}
+        >
+          <Send size={16} />
+          Review and send
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function ChatEmailResponse({
   data,
+  onConfirm,
+  onSendDraft,
+  onSaveDraft,
 }: {
   data: EmailResponseData;
+  onConfirm?: (confirmed: boolean) => void;
+  onSendDraft?: (draft?: EmailDraft) => Promise<void>;
+  onSaveDraft?: (draft: EmailDraft) => Promise<void>;
 }) {
   const emails = data.emails || [];
+  const drafts = data.drafts || (data.type === "email_drafts" ? emails : []);
   const isSingleEmail = Boolean(data.email);
   const isSummary = data.type === "email_summary";
   const isDraft = data.type === "email_draft";
+  const isDraftList = data.type === "email_drafts";
   const isSent = data.type === "email_sent";
 
-  if (isDraft) {
+  if (data.type === "email_confirmation" && data.confirmation) {
+    const confirmation = data.confirmation;
+    const preview = confirmation.preview;
+    return (
+      <section className="email-send-review-card">
+        <div className="email-send-review-header">
+          <div className="chat-email-header-icon"><ShieldCheck size={20} /></div>
+          <div>
+            <p className="panel-label">final review</p>
+            <h3>{confirmation.title || "Review before sending"}</h3>
+            <small>Check every email detail before anything is sent.</small>
+          </div>
+        </div>
+        <div className="email-send-review-content">
+          <div className="email-send-review-fields">
+            {preview.to && <div className="email-draft-field"><span>To</span><strong>{preview.to}</strong></div>}
+            {preview.cc && <div className="email-draft-field"><span>CC</span><strong>{preview.cc}</strong></div>}
+            {preview.bcc && <div className="email-draft-field"><span>BCC</span><strong>{preview.bcc}</strong></div>}
+            {preview.subject && <div className="email-draft-field"><span>Subject</span><strong>{preview.subject}</strong></div>}
+          </div>
+          {preview.body && <div className="email-send-review-body"><span>Message</span><p>{preview.body}</p></div>}
+          <div className="email-send-review-note"><ShieldCheck size={15} /><span>{confirmation.note || "Nothing will be sent until you confirm."}</span></div>
+        </div>
+        <div className="email-send-review-actions">
+          <button type="button" className="email-send-primary" onClick={() => onConfirm?.(true)}><Send size={16} />{confirmation.confirm_label || "Send email"}</button>
+          <button type="button" className="email-send-secondary" onClick={() => onConfirm?.(false)}>{confirmation.cancel_label || "Go back"}</button>
+        </div>
+      </section>
+    );
+  }
+
+  if (isDraft && data.draft) {
+    return <EmailDraftEditor draft={data.draft} title="Draft ready" onSave={onSaveDraft} onReviewSend={onSendDraft} />;
+  }
+
+  if (isDraftList) {
     return (
       <div className="chat-email-card">
-        <div className="chat-email-header">
-          <div className="chat-email-header-icon">
-            <FileText size={19} />
-          </div>
-
-          <div>
-            <p className="panel-label">email draft</p>
-            <h3>Draft Created</h3>
-          </div>
-        </div>
-
-        <div className="email-action-banner success">
-          <MailCheck size={17} />
-          <span>{data.message}</span>
-        </div>
-
-        {data.draft && (
-          <div className="email-draft-preview">
-            <div className="email-draft-field">
-              <span>To</span>
-              <strong>{data.draft.to || "Recipient saved in Gmail"}</strong>
-            </div>
-
-            <div className="email-draft-field">
-              <span>Subject</span>
-              <strong>{data.draft.subject || "(No subject)"}</strong>
-            </div>
-
-            {data.draft.body && (
-              <div className="email-draft-body">
-                {data.draft.body}
-              </div>
-            )}
-          </div>
-        )}
+        <div className="chat-email-header"><div className="chat-email-header-icon"><FileText size={19} /></div><div><p className="panel-label">gmail drafts</p><h3>{drafts.length} {drafts.length === 1 ? "Draft" : "Drafts"}</h3></div></div>
+        {drafts.length ? <div className="email-draft-list">{drafts.map((draft, index) => <EmailDraftEditor key={(draft as EmailDraft).draft_id || `${draft.subject}-${index}`} draft={draft} title={draft.subject || "Untitled draft"} onSave={onSaveDraft} onReviewSend={onSendDraft} />)}</div> : <div className="email-empty-state"><FileText size={22} /><span>No matching drafts found.</span></div>}
       </div>
     );
   }
 
   if (isSent) {
-    return (
-      <div className="chat-email-card">
-        <div className="chat-email-header">
-          <div className="chat-email-header-icon">
-            <Send size={19} />
-          </div>
-
-          <div>
-            <p className="panel-label">email action</p>
-            <h3>Email Sent</h3>
-          </div>
-        </div>
-
-        <div className="email-action-banner success">
-          <MailCheck size={17} />
-          <span>{data.message}</span>
-        </div>
-      </div>
-    );
+    return <div className="chat-email-card"><div className="chat-email-header"><div className="chat-email-header-icon"><Send size={19} /></div><div><p className="panel-label">email action</p><h3>Email Sent</h3></div></div><div className="email-action-banner success"><MailCheck size={17} /><span>{data.message}</span></div></div>;
   }
 
   return (
     <div className="chat-email-card">
-      <div className="chat-email-header">
-        <div className="chat-email-header-icon">
-          {isSummary ? (
-            <FileText size={19} />
-          ) : (
-            <Inbox size={19} />
-          )}
-        </div>
-
-        <div>
-          <p className="panel-label">
-            {isSummary
-              ? "email intelligence"
-              : "gmail response"}
-          </p>
-
-          <h3>
-            {isSummary
-              ? "Inbox Analysis"
-              : isSingleEmail
-                ? "Email Message"
-                : `${emails.length} ${
-                    emails.length === 1
-                      ? "Email"
-                      : "Emails"
-                  }`}
-          </h3>
-        </div>
-      </div>
-
-      {isSummary && data.summary && (
-        <EmailBriefing summary={data.summary} />
-      )}
-
-      {data.email && (
-        <div className="email-message-list">
-          <EmailMessageCard
-            email={data.email}
-            expanded
-          />
-        </div>
-      )}
-
-      {!data.email && emails.length > 0 && (
-        <>
-          {isSummary && (
-            <div className="email-source-divider">
-              <span>Source Emails</span>
-            </div>
-          )}
-
-          <div className="email-message-list">
-            {emails.map((email, index) => (
-              <EmailMessageCard
-                email={email}
-                key={
-                  email.id ||
-                  `${email.subject}-${index}`
-                }
-              />
-            ))}
-          </div>
-        </>
-      )}
+      <div className="chat-email-header"><div className="chat-email-header-icon">{isSummary ? <FileText size={19} /> : <Inbox size={19} />}</div><div><p className="panel-label">{isSummary ? "email intelligence" : "gmail response"}</p><h3>{isSummary ? "Inbox Analysis" : isSingleEmail ? "Email Message" : `${emails.length} ${emails.length === 1 ? "Email" : "Emails"}`}</h3></div></div>
+      {isSummary && data.summary && <EmailBriefing summary={data.summary} />}
+      {data.email && <div className="email-message-list"><EmailMessageCard email={data.email} expanded /></div>}
+      {!data.email && emails.length > 0 && <>{isSummary && <div className="email-source-divider"><span>Source Emails</span></div>}<div className="email-message-list">{emails.map((email, index) => <EmailMessageCard email={email} key={email.id || `${email.subject}-${index}`} />)}</div></>}
     </div>
   );
 }
@@ -1708,6 +1779,10 @@ function App() {
 
   const [emailResponse, setEmailResponse] =
     useState<EmailResponseData | null>(null);
+  const [pendingEmailConfirmation, setPendingEmailConfirmation] =
+    useState<EmailConfirmation | null>(null);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [gmailStatus, setGmailStatus] = useState("gmail not checked");
   const [calendarCardResponse, setCalendarCardResponse] = useState("");
   const [calendarData, setCalendarData] = useState<CalendarView | null>(null);
   const [calendarConnected, setCalendarConnected] = useState(false);
@@ -1749,6 +1824,11 @@ function App() {
       detail: "Checking Google Calendar sync",
     },
     {
+      label: "Gmail API",
+      status: "checking",
+      detail: "Checking Gmail connection",
+    },
+    {
       label: "Project tools",
       status: "checking",
       detail: "Waiting for backend confirmation",
@@ -1759,10 +1839,24 @@ function App() {
     const trimmedCommand = command.trim();
     if (!trimmedCommand) return;
 
+    const confirmationReply = trimmedCommand.toLowerCase();
+
+    if (pendingEmailConfirmation) {
+      if (["yes", "y", "confirm", "confirmed", "send", "archive"].includes(confirmationReply)) {
+        setCommand("");
+        await handleEmailConfirmation(true);
+        return;
+      }
+      if (["no", "n", "cancel", "stop"].includes(confirmationReply)) {
+        setCommand("");
+        await handleEmailConfirmation(false);
+        return;
+      }
+    }
+
     // Keep a pending calendar confirmation in the frontend. This lets the
     // visible Yes/No buttons work immediately and also supports typing
     // "yes" or "no" as the next message without asking Ollama to infer it.
-    const confirmationReply = trimmedCommand.toLowerCase();
     if (eventOptions && eventOptions.events.length === 1) {
       const pendingEventOption = eventOptions.events[0];
       if (["yes", "y", "confirm", "confirmed"].includes(confirmationReply)) {
@@ -1796,6 +1890,7 @@ function App() {
     setCalendarCardResponse("");
     setCalendarData(null);
     setEmailResponse(null);
+    setPendingEmailConfirmation(null);
     setEventOptions(null);
 
     const controller = new AbortController();
@@ -1892,8 +1987,14 @@ function App() {
           "email_list",
           "email_summary",
           "email_draft",
+          "email_drafts",
           "email_sent",
           "email_updated",
+          "email_confirmation",
+          "email_missing_fields",
+          "email_cancelled",
+          "email_error",
+          "email_help",
         ].includes(data.type)
       ) {
         setProjectExplorer(null);
@@ -1913,9 +2014,14 @@ function App() {
           email: data.email || null,
           emails: data.emails || [],
           draft: data.draft || null,
+          drafts: data.drafts || [],
+          confirmation: data.confirmation || null,
+          missing_fields: data.missing_fields || [],
         });
+        setPendingEmailConfirmation(data.confirmation || null);
 
-        setResponse(overview);
+        setResponse(overview || data.response || "Gmail request completed.");
+
         setShouldTypeResponse(true);
       } else {
         setProjectExplorer(null);
@@ -1965,6 +2071,136 @@ function App() {
 
       setShouldTypeResponse(true);
       setResponse(message);
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  async function saveEmailDraft(draft: EmailDraft) {
+    if (!draft.draft_id) throw new Error("This Gmail draft is missing its draft ID.");
+    const payload = {
+      draft_id: draft.draft_id,
+      to: draft.to || "",
+      cc: draft.cc || "",
+      bcc: draft.bcc || "",
+      subject: draft.subject || "",
+      body: draft.body || "",
+    };
+    const res = await fetch(`${API_BASE}/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command: `__ALFRED_GMAIL_DRAFT_UPDATE__${JSON.stringify(payload)}`,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.type === "email_error" || data.type === "email_missing_fields") {
+      throw new Error(data.detail || data.response || "Could not save the Gmail draft.");
+    }
+    setEmailResponse({
+      type: data.type || "email_draft",
+      overview: data.response || "Draft saved.",
+      message: data.response || "Draft saved.",
+      draft: data.draft || draft,
+      drafts: data.drafts || [],
+      confirmation: null,
+    });
+    setResponse(data.response || "Draft saved.");
+    setShouldTypeResponse(true);
+  }
+
+  async function requestSendDraft(draft?: EmailDraft) {
+    if (draft?.draft_id) {
+      await saveEmailDraft(draft);
+    }
+    setIsProcessing(true);
+    setThinkingSteps([
+      "Opening your saved draft",
+      "Preparing the final review",
+      "Waiting for your confirmation",
+    ]);
+
+    try {
+      const res = await fetch(`${API_BASE}/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "send the draft" }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(
+          data.detail ||
+            data.response ||
+            "Could not prepare the draft for sending."
+        );
+      }
+
+      setPendingEmailConfirmation(data.confirmation || null);
+      setEmailResponse({
+        type: data.type || "email_confirmation",
+        overview: data.response || "Review the email before sending.",
+        message: data.response || "Review the email before sending.",
+        summary: data.summary || "",
+        email: data.email || null,
+        emails: data.emails || [],
+        draft: data.draft || null,
+        confirmation: data.confirmation || null,
+        missing_fields: data.missing_fields || [],
+      });
+      setShouldTypeResponse(true);
+      setResponse(data.response || "Review the email before sending.");
+    } catch (error: any) {
+      setShouldTypeResponse(true);
+      setResponse(
+        error?.message || "I couldn’t prepare that draft for sending."
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  async function handleEmailConfirmation(confirmed: boolean) {
+    if (!pendingEmailConfirmation) return;
+
+    setIsProcessing(true);
+    setThinkingSteps([
+      confirmed ? "Sending your email" : "Keeping the draft saved",
+      confirmed ? "Waiting for Gmail" : "Cancelling the send",
+      "Wrapping things up",
+    ]);
+
+    try {
+      const res = await fetch(`${API_BASE}/gmail/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: pendingEmailConfirmation.token,
+          confirmed,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.response || "Gmail confirmation failed.");
+
+      setPendingEmailConfirmation(null);
+      setEmailResponse({
+        type: data.type || "email_updated",
+        overview: data.response || "Gmail action completed.",
+        message: data.response || "Gmail action completed.",
+        summary: data.summary || "",
+        email: data.email || null,
+        emails: data.emails || [],
+        draft: data.draft || null,
+        confirmation: null,
+      });
+      setShouldTypeResponse(true);
+      setResponse(data.response || "Gmail action completed.");
+    } catch (error: any) {
+      setPendingEmailConfirmation(null);
+      setEmailResponse(null);
+      setShouldTypeResponse(true);
+      setResponse(error?.message || "Could not complete that Gmail action.");
     } finally {
       setIsProcessing(false);
     }
@@ -2176,6 +2412,27 @@ function App() {
         label: "Calendar API",
         status: "offline",
         detail: "Calendar is not connected or needs re-auth",
+      });
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/gmail/health`);
+      const data = await res.json();
+      const connected = res.ok && data.connected === true;
+      setGmailConnected(connected);
+      setGmailStatus(connected ? "gmail synced" : "gmail offline");
+      checks.push({
+        label: "Gmail API",
+        status: connected ? "online" : "offline",
+        detail: connected ? `Gmail connected${data.email ? ` as ${data.email}` : ""}` : (data.error || "Gmail needs authentication"),
+      });
+    } catch {
+      setGmailConnected(false);
+      setGmailStatus("gmail offline");
+      checks.push({
+        label: "Gmail API",
+        status: "offline",
+        detail: "Gmail is not connected or needs re-auth",
       });
     }
 
@@ -2456,6 +2713,10 @@ function App() {
               <CalendarDays size={18} />
               <span>{calendarStatus}</span>
             </div>
+            <div className="status-row">
+              <Mail size={18} />
+              <span>{gmailStatus}</span>
+            </div>
           </div>
 
           <div className="panel-block">
@@ -2471,6 +2732,10 @@ function App() {
             <div className={calendarConnected ? "tool-chip" : "tool-chip disabled"}>
               <CalendarDays size={16} />
               <span>calendar assistant</span>
+            </div>
+            <div className={gmailConnected ? "tool-chip" : "tool-chip disabled"}>
+              <Mail size={16} />
+              <span>gmail assistant</span>
             </div>
           </div>
 
@@ -2569,7 +2834,12 @@ function App() {
                 </p>
 
                 {!isTypingResponse && (
-                  <ChatEmailResponse data={emailResponse} />
+                  <ChatEmailResponse
+                    data={emailResponse}
+                    onConfirm={handleEmailConfirmation}
+                    onSendDraft={requestSendDraft}
+                    onSaveDraft={saveEmailDraft}
+                  />
                 )}
               </div>
             ) : (

@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from ai.command_router import handle_ai_command
 from ai.ollama_client import ollama_health
 from calendar_tools.calendar_routes import router as calendar_router
+from gmail_tools.gmail_intent import handle_gmail_confirmation
+from gmail_tools.gmail_service import gmail_health
 from tools.file_manager import (
     list_folder,
     open_path,
@@ -75,6 +77,11 @@ class OpenPathRequest(BaseModel):
     path: str
 
 
+class GmailConfirmationRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=200)
+    confirmed: bool
+
+
 @app.get("/")
 def health_check():
     return {
@@ -119,6 +126,20 @@ def files_read(request: ReadFileRequest):
 @app.post("/files/open")
 def files_open(request: OpenPathRequest):
     return open_path(request.path)
+
+
+@app.get("/gmail/health")
+async def gmail_health_check():
+    return await asyncio.to_thread(gmail_health)
+
+
+@app.post("/gmail/confirm")
+async def gmail_confirm(request: GmailConfirmationRequest):
+    return await asyncio.to_thread(
+        handle_gmail_confirmation,
+        request.token,
+        request.confirmed,
+    )
 
 
 @app.post("/command")
