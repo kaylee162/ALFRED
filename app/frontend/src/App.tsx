@@ -2436,14 +2436,6 @@ function App() {
       });
     }
 
-    checks.push({
-      label: "Project tools",
-      status: backendOk ? "online" : "offline",
-      detail: backendOk
-        ? "Project launcher ready through backend"
-        : "Project tools unavailable until backend is online",
-    });
-
     setSystemChecks(checks);
 
     const allOnline = checks.every((check) => check.status === "online");
