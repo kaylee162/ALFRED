@@ -59,3 +59,12 @@ data/
 *.dba
 app/backend/token.json
 app/backend/credentials.json
+
+# ALFRED persistent memory
+app/backend/data/alfred_memory.db
+app/backend/data/alfred_memory.db-shm
+app/backend/data/alfred_memory.db-wal
+
+# Python caches
+__pycache__/
+*.py[cod]

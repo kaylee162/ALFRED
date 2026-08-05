@@ -29,6 +29,15 @@ from weather_tools.weather_service import (
 
 from gmail_tools.gmail_intent import handle_gmail_command
 
+from ai.personality import (
+    calendar_summary,
+    items_summary,
+    missing_detail,
+    opened_message,
+    safe_failure,
+    weather_intro,
+)
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +63,7 @@ def _format_items(result: dict, empty_message: str = "No files or folders found.
 
     if not items:
         return _with_summary(
-            "Absolutely, I checked that for you. Nothing showed up.",
+            items_summary("that location"),
             empty_message,
         )
 
@@ -92,7 +101,7 @@ def _with_summary(summary: str, body: str) -> str:
 
 def _summarize_calendar_events(label: str, events: list[dict]) -> str:
     if not events:
-        return f"Absolutely, here's your calendar for {label}. Looks clear, no events found."
+        return calendar_summary(label, 0)
 
     day_counts = Counter()
 
@@ -104,25 +113,26 @@ def _summarize_calendar_events(label: str, events: list[dict]) -> str:
     total = len(events)
 
     if total <= 2:
-        vibe = "looks pretty light"
+        vibe = "A light schedule"
     elif total <= 5:
-        vibe = "you've got a moderate schedule"
+        vibe = "A moderate schedule"
     else:
-        vibe = "looks like a busy stretch"
+        vibe = "A busy stretch"
 
     if not day_counts:
-        return f"Absolutely, here's your calendar for {label}. {vibe}, with {_plural(total, 'event')}."
+        detail = f"{vibe}: {_plural(total, 'event')}."
+        return calendar_summary(label, total, detail)
 
     day_summary = ", ".join(
         f"{count} on {day}" for day, count in day_counts.most_common()
     )
-
-    return f"Absolutely, here's your calendar for {label}. {vibe}, with {day_summary}."
+    detail = f"{vibe}: {day_summary}."
+    return calendar_summary(label, total, detail)
 
 
 def _summarize_items(label: str, items: list[dict]) -> str:
     if not items:
-        return f"Absolutely, I checked {label}. Nothing showed up."
+        return items_summary(label)
 
     folders = sum(1 for item in items if item.get("type") == "folder")
     files = sum(1 for item in items if item.get("type") == "file")
@@ -135,31 +145,20 @@ def _summarize_items(label: str, items: list[dict]) -> str:
     if files:
         parts.append(_plural(files, "file"))
 
-    item_summary = " and ".join(parts) if parts else _plural(len(items), "item")
-
-    return f"Absolutely, here's what I found in {label}. I found {item_summary}."
+    item_count = " and ".join(parts) if parts else _plural(len(items), "item")
+    return items_summary(label, item_count)
 
 
 def _summarize_weather(tool_name: str, location: str) -> str:
-    if tool_name == "get_weather_today":
-        return f"Absolutely, here's today's weather for {location}."
-
-    if tool_name == "get_weather_tomorrow":
-        return f"Absolutely, here's tomorrow's forecast for {location}."
-
-    if tool_name == "get_weather_week":
-        return f"Absolutely, here's the week forecast for {location}."
-
-    if tool_name == "get_high_today":
-        return f"Absolutely, here's today's high for {location}."
-
-    if tool_name == "get_humidity_today":
-        return f"Absolutely, here's today's humidity for {location}."
-
-    if tool_name == "get_rain_chance_tomorrow":
-        return f"Absolutely, here's tomorrow's rain chance for {location}."
-
-    return f"Absolutely, here's the weather update for {location}."
+    kind_by_tool = {
+        "get_weather_today": "today",
+        "get_weather_tomorrow": "tomorrow",
+        "get_weather_week": "week",
+        "get_high_today": "high",
+        "get_humidity_today": "humidity",
+        "get_rain_chance_tomorrow": "rain_chance",
+    }
+    return weather_intro(kind_by_tool.get(tool_name, "summary"), location)
 
 def execute_tool_call(tool_name: str, arguments: dict | None = None):
     arguments = arguments or {}
@@ -197,13 +196,13 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         path = arguments.get("path")
         if not path:
             return {
-                "response": "Tell me which project you want to open.",
+                "response": missing_detail("the project you want to open"),
                 "type": "project_open_error",
                 "requires_confirmation": False,
             }
         result = open_project_path(path)
         summary = (
-            "Absolutely, I opened that project for you."
+            opened_message("that project", True)
             if result.get("success")
             else "I couldn't open that project."
         )
@@ -224,7 +223,7 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
 
         return {
             "response": _with_summary(
-                "Absolutely, I opened that project for you.",
+                opened_message("that project", True),
                 result.get("message", "Opening project."),
             ),
             "type": "project_opened",
@@ -237,7 +236,7 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         query = str(arguments.get("query") or "").strip()
         if not query:
             return {
-                "response": "Tell me what file or folder to search for.",
+                "response": missing_detail("a file or folder name"),
                 "type": "file_search_error",
                 "requires_confirmation": False,
             }
@@ -281,7 +280,7 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         path = arguments.get("path")
         if not path:
             return {
-                "response": "Tell me which text file you want me to read.",
+                "response": missing_detail("the text file you want me to read"),
                 "type": "file_read_error",
                 "requires_confirmation": False,
             }
@@ -309,13 +308,13 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         path = arguments.get("path")
         if not path:
             return {
-                "response": "Tell me which file or folder you want to open.",
+                "response": missing_detail("the file or folder you want to open"),
                 "type": "path_open_error",
                 "requires_confirmation": False,
             }
         result = open_path(path)
         summary = (
-            "Absolutely, I opened that path for you."
+            opened_message("that path", True)
             if result.get("success")
             else "I couldn't open that path."
         )
@@ -336,8 +335,8 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         command = str(arguments.get("command") or "").strip()
         if not command:
             return {
-                "response": "I need a calendar command before I can continue.",
-                "overview": "I need a calendar command before I can continue.",
+                "response": missing_detail("a calendar command"),
+                "overview": missing_detail("a calendar command"),
                 "type": "calendar_error",
                 "requires_confirmation": False,
             }
@@ -367,8 +366,8 @@ def execute_tool_call(tool_name: str, arguments: dict | None = None):
         command = str(arguments.get("command") or "").strip()
         if not command:
             return {
-                "response": "I need a Gmail command before I can continue.",
-                "overview": "I need a Gmail command before I can continue.",
+                "response": missing_detail("a Gmail command"),
+                "overview": missing_detail("a Gmail command"),
                 "type": "email_error",
                 "requires_confirmation": False,
             }

@@ -1,7 +1,7 @@
-"""Fast two-stage Ollama router.
+"""Fast two-stage Ollama router with explicit persistent memory.
 
-Every request is still processed by Ollama, but normal chat does not carry all
-tool schemas. Tool requests receive only the relevant tool category.
+Normal chat and tool selection use Ollama. Explicit memory-management commands
+are handled deterministically so remembering and forgetting are predictable.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ai.alfred_tools import ALFRED_TOOLS
+from ai.personality import build_system_prompt
 from ai.ollama_client import (
     OllamaConnectionError,
     OllamaError,
@@ -21,6 +22,13 @@ from ai.ollama_client import (
     chat_with_ollama,
 )
 from ai.tool_executor import execute_tool_call
+from context.confirmation_executor import confirmation_choice, execute_pending_action
+from context.conversation_context import get_conversation_context
+from context.pending_action_store import get_pending_action_store
+from context.workflow_store import get_workflow_store
+from memory.episodic_service import get_episodic_memory_service
+from memory.memory_intent import handle_memory_command, is_memory_command
+from memory.memory_service import get_memory_service
 
 LOGGER = logging.getLogger(__name__)
 TIMEZONE = "America/New_York"
@@ -177,21 +185,24 @@ def _route_request(command: str) -> str:
     return route if route in ROUTE_SCHEMA["properties"]["route"]["enum"] else "chat"
 
 
-def _system_prompt(route: str) -> str:
+def _system_prompt(
+    route: str,
+    command: str,
+    session_id: str,
+) -> str:
     now = datetime.now(ZoneInfo(TIMEZONE))
-    return f"""
-You are ALFRED, Kaylee's local desktop assistant.
-Current local datetime: {now.isoformat()}
-Timezone: {TIMEZONE}
-Selected request category: {route}.
-
-Answer naturally when no tool is necessary. When tools are available, use the
-correct tool. Never invent a tool result or claim an action succeeded before
-the tool confirms it. For calendar and Gmail tool calls, preserve the user's complete
-original wording in the command argument. Ask one concise question only when
-a truly required detail is missing. Keep the final response useful and concise.
-Do not expose tool names, prompts, JSON, or hidden reasoning.
-""".strip()
+    memory_context = get_memory_service().build_prompt_context(command)
+    conversation_context = (
+        get_conversation_context()
+        .build_prompt_context(session_id)
+    )
+    return build_system_prompt(
+        route=route,
+        now=now,
+        timezone=TIMEZONE,
+        memory_context=memory_context,
+        conversation_context=conversation_context,
+    )
 
 
 def _safe_json(value: Any) -> str:
@@ -331,8 +342,15 @@ def _return_payload(
     }
 
 
-def handle_ai_command(command: str) -> dict[str, Any]:
+def _handle_ai_command_core(
+    command: str,
+    session_id: str,
+    workflow_id: str | None = None,
+) -> dict[str, Any]:
     command = _normalize_command(command)
+
+    if is_memory_command(command):
+        return handle_memory_command(command)
 
     if command.startswith("__ALFRED_GMAIL_DRAFT_UPDATE__"):
         result = execute_tool_call("gmail", {"command": command})
@@ -347,6 +365,18 @@ def handle_ai_command(command: str) -> dict[str, Any]:
 
     try:
         candidate_routes = _candidate_routes(command)
+
+        # Very short follow-ups often omit the tool category: “open the second
+        # one”, “move it to Friday”, or “use that version”. Reuse the previous
+        # route only when the wording is clearly contextual.
+        conversation = get_conversation_context()
+        if (
+            not candidate_routes
+            and conversation.is_contextual_follow_up(command)
+        ):
+            previous_route = conversation.last_route(session_id)
+            if previous_route in TOOL_NAMES_BY_ROUTE:
+                candidate_routes = {previous_route}
 
         # Do not ask the outer routing model to reconstruct Gmail arguments.
         # Every Gmail request is forwarded unchanged to gmail_intent.py, where
@@ -389,7 +419,7 @@ def handle_ai_command(command: str) -> dict[str, Any]:
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": _system_prompt(route),
+                "content": _system_prompt(route, command, session_id),
             },
             {
                 "role": "user",
@@ -420,7 +450,25 @@ def handle_ai_command(command: str) -> dict[str, Any]:
                         "Ollama returned no tool call; using local fallback %s",
                         fallback_name,
                     )
-                    result = execute_tool_call(fallback_name, fallback_arguments)
+                    workflow_store = get_workflow_store()
+                    result = (
+                        workflow_store.completed_result(
+                            workflow_id,
+                            fallback_name,
+                            fallback_arguments,
+                        )
+                        if workflow_id
+                        else None
+                    )
+                    if result is None:
+                        result = execute_tool_call(fallback_name, fallback_arguments)
+                        if workflow_id:
+                            workflow_store.record_step(
+                                workflow_id=workflow_id,
+                                tool_name=fallback_name,
+                                arguments=fallback_arguments,
+                                result=result,
+                            )
                     return _return_payload(_result_text(result), [result])
 
                 final_text = str(
@@ -447,10 +495,28 @@ def handle_ai_command(command: str) -> dict[str, Any]:
                     arguments["command"] = command
 
                 try:
-                    result = execute_tool_call(
-                        tool_name,
-                        arguments,
+                    workflow_store = get_workflow_store()
+                    result = (
+                        workflow_store.completed_result(
+                            workflow_id,
+                            tool_name,
+                            arguments,
+                        )
+                        if workflow_id
+                        else None
                     )
+                    if result is None:
+                        result = execute_tool_call(
+                            tool_name,
+                            arguments,
+                        )
+                        if workflow_id:
+                            workflow_store.record_step(
+                                workflow_id=workflow_id,
+                                tool_name=tool_name,
+                                arguments=arguments,
+                                result=result,
+                            )
 
                 except Exception as exc:
                     LOGGER.exception(
@@ -550,6 +616,217 @@ def handle_ai_command(command: str) -> dict[str, Any]:
             "error_code": "command_error",
         }
         
+
+def _infer_route_from_result(result: dict[str, Any]) -> str:
+    response_type = str(result.get("type") or "").casefold()
+    if response_type.startswith("calendar") or "calendar" in result:
+        return "calendar"
+    if (
+        response_type.startswith("email")
+        or response_type.startswith("gmail")
+        or any(key in result for key in ("gmail", "email", "emails", "draft", "drafts"))
+    ):
+        return "email"
+    if response_type.startswith("weather") or "weather" in result:
+        return "weather"
+    if response_type.startswith("project") or "projects" in result:
+        return "projects"
+    if (
+        response_type.startswith("file")
+        or response_type in {"folder", "recent_downloads", "path_opened", "path_open_error"}
+    ):
+        return "files"
+    if response_type == "memory":
+        return "memory"
+    return "chat"
+
+
+def _record_result(
+    *,
+    session_id: str,
+    original_command: str,
+    result: dict[str, Any],
+    workflow_id: str | None = None,
+) -> dict[str, Any]:
+    route = _infer_route_from_result(result)
+    response_text = _result_text(result)
+    get_conversation_context().add_turn(
+        session_id=session_id,
+        user_text=original_command,
+        assistant_text=response_text,
+        route=route,
+        response_type=str(result.get("type") or "chat"),
+    )
+
+    pending_store = get_pending_action_store()
+    if result.get("requires_confirmation"):
+        pending_store.capture_from_result(
+            session_id=session_id,
+            original_command=original_command,
+            route=route,
+            result=result,
+            workflow_id=workflow_id,
+        )
+    elif route not in {"chat", "memory"}:
+        pending_store.clear(session_id)
+
+    response_type = str(result.get("type") or "chat")
+    if route != "chat" and response_type != "error":
+        get_episodic_memory_service().record(
+            session_id=session_id,
+            workflow_id=workflow_id,
+            route=route,
+            event_type=response_type,
+            summary=response_text,
+            importance=0.75 if result.get("requires_confirmation") else 0.6,
+        )
+
+    if workflow_id:
+        get_workflow_store().update_status(
+            workflow_id,
+            "waiting_confirmation" if result.get("requires_confirmation") else "completed",
+            route=route,
+            final_response=response_text,
+        )
+
+    return result
+
+
+_RESUME_PATTERN = re.compile(
+    r"^(?:resume|continue|finish)(?:\s+(?:workflow|task))?(?:\s+([a-f0-9]{8,32}))?[.!]?$",
+    re.I,
+)
+
+
+def _resume_requested(command: str) -> str | None | bool:
+    match = _RESUME_PATTERN.match(command.strip())
+    if not match:
+        return False
+    return match.group(1) or None
+
+def handle_ai_command(
+    command: str,
+    session_id: str = "default",
+) -> dict[str, Any]:
+    """Handle one command with durable memory, workflows, and confirmations."""
+
+    original_command = command.strip()
+    workflow_store = get_workflow_store()
+    pending_store = get_pending_action_store()
+
+    choice = confirmation_choice(original_command)
+    pending = pending_store.get(session_id)
+    if choice is not None and pending is not None:
+        try:
+            result = execute_pending_action(pending, confirmed=choice)
+        except Exception as exc:
+            LOGGER.exception("Pending action %s failed", pending.action_id)
+            result = {
+                "response": "I couldn't complete that confirmation. Nothing was changed.",
+                "overview": "I couldn't complete that confirmation. Nothing was changed.",
+                "type": "confirmation_error",
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
+
+        pending_store.clear(session_id)
+        if result.get("requires_confirmation"):
+            pending_store.capture_from_result(
+                session_id=session_id,
+                original_command=pending.original_command,
+                route=pending.route,
+                result=result,
+                workflow_id=pending.workflow_id,
+            )
+        if pending.workflow_id:
+            workflow_store.update_status(
+                pending.workflow_id,
+                "waiting_confirmation" if result.get("requires_confirmation") else "completed",
+                route=pending.route,
+                final_response=_result_text(result),
+            )
+        return _record_result(
+            session_id=session_id,
+            original_command=original_command,
+            result=result,
+            workflow_id=pending.workflow_id,
+        )
+
+    resume_request = _resume_requested(original_command)
+    if resume_request is not False:
+        workflow = (
+            workflow_store.get(str(resume_request))
+            if resume_request
+            else workflow_store.latest_resumable(session_id)
+        )
+        if workflow is None:
+            result = {
+                "response": "There is no interrupted workflow to resume.",
+                "type": "workflow",
+                "requires_confirmation": False,
+            }
+            return _record_result(
+                session_id=session_id,
+                original_command=original_command,
+                result=result,
+            )
+        workflow_store.update_status(workflow.workflow_id, "active")
+        try:
+            result = _handle_ai_command_core(
+                workflow.original_command,
+                session_id,
+                workflow.workflow_id,
+            )
+        except Exception as exc:
+            workflow_store.update_status(
+                workflow.workflow_id,
+                "failed",
+                error=str(exc),
+            )
+            raise
+        return _record_result(
+            session_id=session_id,
+            original_command=original_command,
+            result=result,
+            workflow_id=workflow.workflow_id,
+        )
+
+    workflow = workflow_store.start(
+        session_id=session_id,
+        original_command=original_command,
+    )
+    try:
+        result = _handle_ai_command_core(
+            original_command,
+            session_id,
+            workflow.workflow_id,
+        )
+    except Exception as exc:
+        workflow_store.update_status(
+            workflow.workflow_id,
+            "failed",
+            error=str(exc),
+        )
+        raise
+
+    # Learn only clear, durable preferences. Tool results become episodes,
+    # not personal facts.
+    try:
+        learned = get_memory_service().maybe_learn_durable_preference(original_command)
+        if learned is not None:
+            memory, created = learned
+            if created:
+                result.setdefault("learned_memory", memory.to_dict())
+    except Exception:
+        LOGGER.exception("Automatic preference learning failed")
+
+    return _record_result(
+        session_id=session_id,
+        original_command=original_command,
+        result=result,
+        workflow_id=workflow.workflow_id,
+    )
+
 def _compact_tool_result(
     tool_name: str,
     result: Any,
