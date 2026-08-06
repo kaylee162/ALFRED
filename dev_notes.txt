@@ -57,6 +57,7 @@ run backend
 cd app/backend
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn main:app --reload
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 ctrl + fn + b to stop
 

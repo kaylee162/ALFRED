@@ -2224,3 +2224,28 @@ h1 {
     width: 100%;
   }
 }
+
+/* Add these rules to App.css if your existing console-header styles do not already support the voice button. */
+.console-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.voice-toggle-button {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid rgba(94, 211, 255, 0.35);
+  border-radius: 999px;
+  padding: 0.38rem 0.7rem;
+  color: inherit;
+  background: rgba(5, 24, 38, 0.72);
+  cursor: pointer;
+}
+
+.voice-toggle-button:hover {
+  border-color: rgba(94, 211, 255, 0.8);
+  background: rgba(9, 39, 58, 0.92);
+}
