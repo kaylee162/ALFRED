@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 from datetime import datetime
 from typing import Any
@@ -89,6 +90,57 @@ DIRECT_RETURN_TOOLS = {
     "read_text_file",
     "open_path",
 }
+
+_GREETING_ONLY_PATTERN = re.compile(
+    r"^(?:(?:hi|hey|hello|good\s+(?:morning|afternoon|evening))\s+)?"
+    r"alfred[,.!?\s]*$|^(?:hi|hey|hello|good\s+(?:morning|afternoon|evening))[,.!?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def _daypart(now: datetime) -> str:
+    if now.hour < 12:
+        return "morning"
+    if now.hour < 18:
+        return "afternoon"
+    return "evening"
+
+
+def _greeting_response(command: str) -> dict[str, Any] | None:
+    """Return a friendly greeting only when the entire request is a greeting."""
+    text = re.sub(r"\s+", " ", command.strip())
+    if not text or not _GREETING_ONLY_PATTERN.fullmatch(text):
+        return None
+
+    now = datetime.now(ZoneInfo(TIMEZONE))
+    period = _daypart(now)
+    responses = {
+        "morning": [
+            "Good morning, Kaylee. What are we working on?",
+            "Morning, Kaylee. Ready when you are.",
+            "Good morning. What can I take care of for you?",
+            "Morning. Systems are up and I am at your service.",
+        ],
+        "afternoon": [
+            "Good afternoon, Kaylee. What can I handle for you?",
+            "Afternoon, Kaylee. What are we tackling?",
+            "Good afternoon. Ready for your next command.",
+            "Afternoon. Everything is standing by.",
+        ],
+        "evening": [
+            "Good evening, Kaylee. What can I do for you?",
+            "Evening, Kaylee. What are we working on?",
+            "Good evening. I am ready when you are.",
+            "Evening. Systems are steady and standing by.",
+        ],
+    }
+
+    return {
+        "response": random.choice(responses[period]),
+        "requires_confirmation": False,
+        "type": "chat",
+    }
+
 
 def _normalize_command(command: str) -> str:
     text = command.strip()
@@ -347,6 +399,10 @@ def _handle_ai_command_core(
     session_id: str,
     workflow_id: str | None = None,
 ) -> dict[str, Any]:
+    greeting = _greeting_response(command)
+    if greeting is not None:
+        return greeting
+
     command = _normalize_command(command)
 
     if is_memory_command(command):

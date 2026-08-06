@@ -24,6 +24,8 @@ from tools.file_manager import (
     recent_downloads,
     search_files,
 )
+from routes.voice import router as voice_router
+from services.voice_service import voice_service
 from tools.project_launcher import (
     open_project_path,
     open_project_in_vscode,
@@ -47,6 +49,15 @@ app.add_middleware(
 )
 
 app.include_router(calendar_router)
+app.include_router(voice_router)
+
+
+@app.on_event("startup")
+async def warm_voice_on_startup() -> None:
+    """Warm Kokoro without delaying the rest of the backend startup."""
+    app.state.voice_warmup_task = asyncio.create_task(
+        asyncio.to_thread(voice_service.warm_up)
+    )
 
 
 class CommandRequest(BaseModel):

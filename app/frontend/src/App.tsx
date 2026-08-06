@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   Activity,
   CalendarDays,
@@ -15,6 +15,8 @@ import {
   Send,
   ShieldCheck,
   Terminal,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 import {
@@ -22,6 +24,8 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
 } from "./api/calendarApi";
+
+import { useAlfredVoice } from "./hooks/useAlfredVoice";
 
 import "./App.css";
 
@@ -320,44 +324,6 @@ function getVisibleResponse(response: string) {
 
 function isDateOnly(value?: string | null) {
   return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
-function isFutureUpcomingEvent(event: CalendarEvent) {
-  // Keep all-day events for the current day.
-  if (event.all_day || isDateOnly(event.start)) {
-    const eventDate = parseLocalCalendarDate(event.start);
-    if (!eventDate) return false;
-
-    const today = new Date();
-
-    const eventDay = new Date(
-      eventDate.getFullYear(),
-      eventDate.getMonth(),
-      eventDate.getDate()
-    );
-
-    const todayDay = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate()
-    );
-
-    return eventDay >= todayDay;
-  }
-
-  const now = new Date();
-
-  const end = event.end
-    ? parseLocalCalendarDate(event.end)
-    : null;
-
-  if (end) {
-    return end.getTime() > now.getTime();
-  }
-
-  const start = parseLocalCalendarDate(event.start);
-
-  return !!start && start.getTime() > now.getTime();
 }
 
 function parseLocalCalendarDate(value?: string | null) {
@@ -1768,6 +1734,15 @@ function buildAlfredOverview(
 }
 
 function App() {
+  const {
+    voiceState,
+    voiceEnabled,
+    setVoiceEnabled,
+    speak,
+    stopSpeaking,
+    unlockVoice,
+  } = useAlfredVoice();
+  const lastSpokenResponseRef = useRef("");
   const [command, setCommand] = useState("");
   const startupMessage = `${getGreeting()}, Kaylee. Running systems check...`;
   const [response, setResponse] = useState(startupMessage);
@@ -1838,6 +1813,11 @@ function App() {
   async function submitCommand() {
     const trimmedCommand = command.trim();
     if (!trimmedCommand) return;
+
+    // Resume the browser audio context while this function is still running
+    // inside the user's click or Enter-key gesture. Chrome may otherwise
+    // block playback after the asynchronous speech request finishes.
+    void unlockVoice();
 
     const confirmationReply = trimmedCommand.toLowerCase();
 
@@ -2678,6 +2658,29 @@ function App() {
     };
   }, [response, shouldTypeResponse]);
 
+  useEffect(() => {
+    if (
+      !voiceEnabled ||
+      isProcessing ||
+      isTypingResponse ||
+      !response.trim() ||
+      response === startupMessage ||
+      lastSpokenResponseRef.current === response
+    ) {
+      return;
+    }
+
+    lastSpokenResponseRef.current = response;
+    void speak(response);
+  }, [
+    isProcessing,
+    isTypingResponse,
+    response,
+    speak,
+    startupMessage,
+    voiceEnabled,
+  ]);
+
   const futureUpcomingEvents = events;
 
   return (
@@ -2699,7 +2702,17 @@ function App() {
             </div>
             <div className="status-row">
               <Radio size={18} />
-              <span>voice offline</span>
+              <span>
+                {!voiceEnabled
+                  ? "voice muted"
+                  : voiceState === "speaking"
+                    ? "voice speaking"
+                    : voiceState === "loading"
+                      ? "voice preparing"
+                      : voiceState === "error"
+                        ? "voice unavailable"
+                        : "voice ready"}
+              </span>
             </div>
             <div className="status-row">
               <CalendarDays size={18} />
@@ -2757,7 +2770,7 @@ function App() {
            <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.7.1
+              Adaptive Learning Framework for Responsive Executive Decisions V.8
             </p>
           </div>
 
@@ -2765,6 +2778,46 @@ function App() {
             <div className="console-header">
               <Terminal size={18} />
               <span>command input</span>
+              <button
+                type="button"
+                className="voice-toggle-button"
+                onClick={() => {
+                  if (voiceState === "speaking" || voiceState === "loading") {
+                    stopSpeaking();
+                    return;
+                  }
+                  const nextEnabled = !voiceEnabled;
+                  setVoiceEnabled(nextEnabled);
+                  if (nextEnabled) {
+                    void unlockVoice();
+                  }
+                }}
+                aria-label={
+                  voiceState === "speaking" || voiceState === "loading"
+                    ? "Stop ALFRED voice"
+                    : voiceEnabled
+                      ? "Mute ALFRED voice"
+                      : "Enable ALFRED voice"
+                }
+                title={
+                  voiceState === "speaking" || voiceState === "loading"
+                    ? "Stop speaking"
+                    : voiceEnabled
+                      ? "Mute voice"
+                      : "Enable voice"
+                }
+              >
+                {voiceEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
+                <span>
+                  {voiceState === "speaking"
+                    ? "Stop"
+                    : voiceState === "loading"
+                      ? "Preparing"
+                      : voiceEnabled
+                        ? "Voice on"
+                        : "Voice off"}
+                </span>
+              </button>
             </div>
 
             <div className="command-input-row">
