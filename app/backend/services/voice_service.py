@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import threading
+from collections import OrderedDict
 import time
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,8 @@ class VoiceService:
         self._ready = False
         self._last_error = ""
         self._load_seconds: float | None = None
+        self._last_synthesis_seconds: float | None = None
+        self._memory_cache: OrderedDict[str, bytes] = OrderedDict()
 
     def _configure_hugging_face(self) -> None:
         # Once the model has been downloaded, cache-only mode prevents a HEAD
@@ -52,6 +55,19 @@ class VoiceService:
                 if self._pipeline is None:
                     self._configure_hugging_face()
                     try:
+                        import warnings
+
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="dropout option adds dropout",
+                            category=UserWarning,
+                        )
+
+                        warnings.filterwarnings(
+                            "ignore",
+                            message=".*weight_norm.*deprecated.*",
+                            category=FutureWarning,
+                        )
                         from kokoro import KPipeline
                     except ImportError as exc:
                         raise VoiceUnavailableError(
@@ -125,6 +141,12 @@ class VoiceService:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    def _remember_audio(self, cache_key: str, audio_bytes: bytes) -> None:
+        self._memory_cache[cache_key] = audio_bytes
+        self._memory_cache.move_to_end(cache_key)
+        while len(self._memory_cache) > max(1, VOICE_CONFIG.memory_cache_entries):
+            self._memory_cache.popitem(last=False)
+
     def warm_up(self) -> None:
         """Load Kokoro and the configured voice before the first real reply."""
         if not VOICE_CONFIG.enabled or not VOICE_CONFIG.warm_on_startup:
@@ -137,7 +159,7 @@ class VoiceService:
         try:
             # Calling synthesize performs one tiny inference, which also loads
             # bm_george.pt. This avoids making the user's first reply pay that cost.
-            self.synthesize("Voice systems ready.")
+            self.synthesize("Good evening, Kaylee. Alfred is ready.")
             self._ready = True
             LOGGER.info("ALFRED voice warm-up complete.")
         except Exception as exc:
@@ -167,6 +189,7 @@ class VoiceService:
             "offline": VOICE_CONFIG.offline,
             "sample_rate": VOICE_CONFIG.sample_rate,
             "load_seconds": self._load_seconds,
+            "last_synthesis_seconds": self._last_synthesis_seconds,
             "message": (
                 self._last_error
                 or ("Voice synthesis is ready." if self._ready else "Voice is loading.")
@@ -178,13 +201,27 @@ class VoiceService:
         if not spoken_text:
             raise ValueError("No speakable text was provided.")
 
-        cache_path = self._cache_dir / f"{self._cache_key(spoken_text)}.wav"
+        cache_key = self._cache_key(spoken_text)
+        cached_bytes = self._memory_cache.get(cache_key)
+        if cached_bytes is not None:
+            self._memory_cache.move_to_end(cache_key)
+            return cached_bytes
+
+        cache_path = self._cache_dir / f"{cache_key}.wav"
         if cache_path.exists() and cache_path.stat().st_size > 44:
-            return cache_path.read_bytes()
+            audio_bytes = cache_path.read_bytes()
+            self._remember_audio(cache_key, audio_bytes)
+            return audio_bytes
 
         with self._synthesis_lock:
+            cached_bytes = self._memory_cache.get(cache_key)
+            if cached_bytes is not None:
+                self._memory_cache.move_to_end(cache_key)
+                return cached_bytes
             if cache_path.exists() and cache_path.stat().st_size > 44:
-                return cache_path.read_bytes()
+                audio_bytes = cache_path.read_bytes()
+                self._remember_audio(cache_key, audio_bytes)
+                return audio_bytes
 
             try:
                 import numpy as np
@@ -194,6 +231,7 @@ class VoiceService:
                     "Voice dependencies numpy and soundfile are required."
                 ) from exc
 
+            synthesis_started = time.perf_counter()
             pipeline = self._get_pipeline()
             audio_parts = []
             for _, _, audio in pipeline(
@@ -218,7 +256,10 @@ class VoiceService:
             temporary_path = cache_path.with_suffix(".tmp")
             temporary_path.write_bytes(audio_bytes)
             temporary_path.replace(cache_path)
+            self._last_synthesis_seconds = time.perf_counter() - synthesis_started
+            self._remember_audio(cache_key, audio_bytes)
             self._ready = True
+            LOGGER.info("Speech synthesized in %.2fs (%d characters)", self._last_synthesis_seconds, len(spoken_text))
             return audio_bytes
 
 

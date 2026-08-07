@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import traceback
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +14,11 @@ from context.workflow_store import get_workflow_store
 from memory.episodic_service import get_episodic_memory_service
 
 from ai.command_router import handle_ai_command
-from ai.ollama_client import ollama_health
+from ai.ollama_client import ollama_health, warm_ollama
 from calendar_tools.calendar_routes import router as calendar_router
 from gmail_tools.gmail_intent import handle_gmail_confirmation
 from gmail_tools.gmail_service import gmail_health
+from startup.startup_briefing_service import build_startup_briefing
 from tools.file_manager import (
     list_folder,
     open_path,
@@ -24,18 +26,30 @@ from tools.file_manager import (
     recent_downloads,
     search_files,
 )
-from routes.voice import router as voice_router
-from services.voice_service import voice_service
 from tools.project_launcher import (
     open_project_path,
     open_project_in_vscode,
     list_project_folder,
 )
 
+from routes.voice import router as voice_router
+from services.voice_service import voice_service
+
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
-app = FastAPI(title="ALFRED Backend")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    voice_task = asyncio.create_task(
+        asyncio.to_thread(voice_service.warm_up)
+    )
+
+    yield
+
+    if not voice_task.done():
+        voice_task.cancel()
+        
+app = FastAPI(title="ALFRED Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,14 +64,6 @@ app.add_middleware(
 
 app.include_router(calendar_router)
 app.include_router(voice_router)
-
-
-@app.on_event("startup")
-async def warm_voice_on_startup() -> None:
-    """Warm Kokoro without delaying the rest of the backend startup."""
-    app.state.voice_warmup_task = asyncio.create_task(
-        asyncio.to_thread(voice_service.warm_up)
-    )
 
 
 class CommandRequest(BaseModel):
@@ -95,8 +101,6 @@ class OpenPathRequest(BaseModel):
     path: str
 
 
-
-
 class MemoryUpdateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=500)
     category: str | None = None
@@ -124,6 +128,33 @@ def health_check():
     }
 
 
+@app.get("/startup/briefing")
+async def startup_briefing():
+    try:
+        return await asyncio.to_thread(
+            build_startup_briefing,
+        )
+    except Exception as exc:
+        LOGGER.error("Startup briefing failed: %s\n%s", exc, traceback.format_exc())
+        return {
+            "type": "startup_briefing",
+            "greeting": "Welcome back",
+            "message": (
+                "Core systems are online, but I could not complete the full briefing. "
+                "You can still use ALFRED normally."
+            ),
+            "action": None,
+            "systems": {
+                "backend": {"online": True},
+                "calendar": {"online": False},
+                "gmail": {"online": False},
+                "ollama": {"online": False},
+                "voice": {"online": False},
+            },
+            "error": str(exc),
+        }
+
+
 @app.post("/projects/list")
 def projects_list(request: ProjectFolderRequest):
     return list_project_folder(request.path)
@@ -133,9 +164,11 @@ def projects_list(request: ProjectFolderRequest):
 def projects_open(request: OpenProjectRequest):
     return open_project_path(request.path)
 
+
 @app.post("/projects/open-vscode")
 def projects_open_vscode(request: OpenProjectRequest):
     return open_project_in_vscode(request.path)
+
 
 @app.post("/files/search")
 def files_search(request: SearchFilesRequest):
@@ -160,8 +193,6 @@ def files_read(request: ReadFileRequest):
 @app.post("/files/open")
 def files_open(request: OpenPathRequest):
     return open_path(request.path)
-
-
 
 
 @app.get("/memory")
@@ -216,7 +247,6 @@ def memory_delete(memory_id: int):
 
 @app.get("/context")
 def context_status(session_id: str = "default"):
-    """Inspect temporary context for debugging or a future frontend panel."""
     conversation = get_conversation_context().snapshot(session_id)
     pending = get_pending_action_store().snapshot(session_id)
     return {
@@ -228,7 +258,6 @@ def context_status(session_id: str = "default"):
 
 @app.delete("/context")
 def context_clear(session_id: str = "default"):
-    """Clear temporary conversation and confirmation state, not long-term memory."""
     turns_removed = get_conversation_context().clear(session_id)
     pending_removed = get_pending_action_store().clear(session_id)
     return {
@@ -283,8 +312,6 @@ async def gmail_confirm(request: GmailConfirmationRequest):
 
 @app.post("/command")
 async def handle_command(request: CommandRequest):
-    """Run blocking Ollama/tool work off FastAPI's event loop."""
-
     command = request.command.strip()
     if not command:
         return {
@@ -294,7 +321,11 @@ async def handle_command(request: CommandRequest):
         }
 
     try:
-        result = await asyncio.to_thread(handle_ai_command, command, request.session_id)
+        result = await asyncio.to_thread(
+            handle_ai_command,
+            command,
+            request.session_id,
+        )
         if result:
             return result
         return {

@@ -24,6 +24,9 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
 } from "./api/calendarApi";
+import { getStartupBriefing } from "./api/startupBriefingApi";
+import { StartupBriefing } from "./components/StartupBriefing";
+import type { StartupBriefingData } from "./types/startupBriefing";
 
 import { useAlfredVoice } from "./hooks/useAlfredVoice";
 
@@ -198,14 +201,6 @@ type EmailResponseData = {
   confirmation?: EmailConfirmation | null;
   missing_fields?: string[];
 };
-
-function getGreeting() {
-  const hour = new Date().getHours();
-
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
-}
 
 function getThinkingSteps(command: string) {
   const lower = command.toLowerCase();
@@ -936,7 +931,7 @@ function EmailBriefing({
   const {
     displayedText,
     isTyping,
-  } = useTypewriter(summary, true, 15);
+  } = useTypewriter(summary, true, 12);
 
   const parsed = parseEmailBriefing(displayedText);
 
@@ -1210,7 +1205,7 @@ function ChatEmailResponse({
 function useTypewriter(
   text: string,
   enabled: boolean,
-  speed = 18
+  speed = 14
 ) {
   const [displayedText, setDisplayedText] =
     useState(enabled ? "" : text);
@@ -1743,8 +1738,10 @@ function App() {
     unlockVoice,
   } = useAlfredVoice();
   const lastSpokenResponseRef = useRef("");
+  const startupSpokenRef = useRef(false);
+  const pendingStartupSpeechRef = useRef("");
   const [command, setCommand] = useState("");
-  const startupMessage = `${getGreeting()}, Kaylee. Running systems check...`;
+  const startupMessage = "";
   const [response, setResponse] = useState(startupMessage);
   const [displayedResponse, setDisplayedResponse] = useState(startupMessage);
   const [isTypingResponse, setIsTypingResponse] = useState(false);
@@ -1784,6 +1781,10 @@ function App() {
   const [pendingStatus, setPendingStatus] = useState("");
   
   const [showStartupChecks, setShowStartupChecks] = useState(true);
+  const [startupBriefing, setStartupBriefing] =
+    useState<StartupBriefingData | null>(null);
+  const [startupBriefingLoading, setStartupBriefingLoading] = useState(true);
+  const [startupBriefingError, setStartupBriefingError] = useState("");
   const [, setBackendOnline] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
@@ -1810,14 +1811,100 @@ function App() {
     },
   ]);
 
-  async function submitCommand() {
-    const trimmedCommand = command.trim();
+  async function loadStartupBriefing() {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 35_000);
+
+    setStartupBriefingLoading(true);
+    setStartupBriefingError("");
+
+    try {
+      const briefing = await getStartupBriefing(controller.signal);
+      setStartupBriefing(briefing);
+      startupSpokenRef.current = false;
+
+      const startupEvents = briefing.calendar?.events;
+      if (Array.isArray(startupEvents)) {
+        setEvents(startupEvents as CalendarEvent[]);
+      }
+
+      const calendarOnline = briefing.systems?.calendar?.online === true;
+      const gmailOnline = briefing.systems?.gmail?.online === true;
+      setBackendOnline(true);
+      setCalendarConnected(calendarOnline);
+      setCalendarStatus(calendarOnline ? "calendar synced" : "calendar offline");
+      setGmailConnected(gmailOnline);
+      setGmailStatus(gmailOnline ? "gmail synced" : "gmail offline");
+
+      setSystemChecks([
+        {
+          label: "Backend",
+          status: "online",
+          detail: "FastAPI backend responded",
+        },
+        {
+          label: "Calendar API",
+          status: calendarOnline ? "online" : "offline",
+          detail: calendarOnline
+            ? "Calendar connected and today’s events loaded"
+            : "Calendar is unavailable or needs re-auth",
+        },
+        {
+          label: "Gmail API",
+          status: gmailOnline ? "online" : "offline",
+          detail: gmailOnline
+            ? "Gmail connected and unread mail checked"
+            : "Gmail is unavailable or needs re-auth",
+        },
+        {
+          label: "Voice",
+          status: briefing.systems?.voice?.online === false ? "offline" : "online",
+          detail: briefing.systems?.voice?.online === false
+            ? "Voice warm-up did not complete"
+            : "Voice warm-up started in the background",
+        },
+      ]);
+    } catch (error: any) {
+      const message =
+        error?.name === "AbortError"
+          ? "The briefing took too long, but ALFRED is still ready."
+          : error?.message || "The startup briefing could not be loaded.";
+
+      setStartupBriefingError(message);
+      void runSystemCheck();
+    } finally {
+      window.clearTimeout(timeoutId);
+      setStartupBriefingLoading(false);
+    }
+  }
+
+  async function activateVoice() {
+    try {
+      await unlockVoice();
+
+      const startupSpeech = pendingStartupSpeechRef.current.trim();
+
+      if (
+        voiceEnabled &&
+        startupSpeech &&
+        !startupSpokenRef.current
+      ) {
+        startupSpokenRef.current = true;
+        pendingStartupSpeechRef.current = "";
+        await speak(startupSpeech);
+      }
+    } catch (error) {
+      console.warn("Could not activate ALFRED voice.", error);
+    }
+  }
+
+  async function submitCommand(commandOverride?: string) {
+    const trimmedCommand = (commandOverride ?? command).trim();
     if (!trimmedCommand) return;
 
-    // Resume the browser audio context while this function is still running
-    // inside the user's click or Enter-key gesture. Chrome may otherwise
-    // block playback after the asynchronous speech request finishes.
-    void unlockVoice();
+    // Unlock browser audio while we are still inside the user's gesture.
+    // If the startup briefing is queued, this also plays it once.
+    void activateVoice();
 
     const confirmationReply = trimmedCommand.toLowerCase();
 
@@ -2421,11 +2508,11 @@ function App() {
     const allOnline = checks.every((check) => check.status === "online");
     const partiallyOnline = checks.some((check) => check.status === "online");
 
-    setShouldTypeResponse(true);
-    setResponse(
-      `${getGreeting()}, Kaylee.\n\n` +
-        `${allOnline || partiallyOnline ? "Ready when you are." : "Some systems are offline. Start the backend, then refresh ALFRED."}`
-    );
+    if (!allOnline && !partiallyOnline) {
+      setStartupBriefingError(
+        "Some systems are offline. Start the backend, then refresh ALFRED."
+      );
+    }
   }
 
   function openEventEditor(event: EditableCalendarEvent) {
@@ -2621,7 +2708,7 @@ function App() {
   }
 
   useEffect(() => {
-    runSystemCheck();
+    void loadStartupBriefing();
   }, []);
 
   useEffect(() => {
@@ -2637,47 +2724,117 @@ function App() {
       return;
     }
 
-    setDisplayedResponse("");
+    let cancelled = false;
+    let fallbackTimer: number | null = null;
+
+    const finishText = () => {
+      if (cancelled) return;
+      setDisplayedResponse(response);
+      setIsTypingResponse(false);
+    };
+
+    const TEXT_ONLY_INTERVAL_MS = 10;
+    const TEXT_ONLY_CHARACTERS_PER_TICK = 3;
+
+    const runFastTextOnlyAnimation = () => {
+      let index = 0;
+
+      setDisplayedResponse("");
+      setIsTypingResponse(true);
+
+      fallbackTimer = window.setInterval(() => {
+        index = Math.min(
+          response.length,
+          index + TEXT_ONLY_CHARACTERS_PER_TICK,
+        );
+
+        setDisplayedResponse(response.slice(0, index));
+
+        if (index >= response.length) {
+          if (fallbackTimer !== null) {
+            window.clearInterval(fallbackTimer);
+          }
+
+          fallbackTimer = null;
+          finishText();
+        }
+      }, TEXT_ONLY_INTERVAL_MS);
+    };
+
+    const shouldSynchronizeVoice =
+      voiceEnabled &&
+      !showStartupChecks &&
+      !isProcessing &&
+      response !== startupMessage &&
+      lastSpokenResponseRef.current !== response;
+
+    if (!shouldSynchronizeVoice) {
+      runFastTextOnlyAnimation();
+      return () => {
+        cancelled = true;
+        if (fallbackTimer !== null) window.clearInterval(fallbackTimer);
+      };
+    }
+
+    lastSpokenResponseRef.current = response;
+    const firstPhraseEnd = response.search(/[,.!?;:]\s/);
+    const preparingCharacterCount = Math.min(
+      response.length,
+      Math.max(1, firstPhraseEnd > 0 ? firstPhraseEnd + 1 : 1),
+    );
+    setDisplayedResponse(response.slice(0, preparingCharacterCount));
     setIsTypingResponse(true);
 
-    let index = 0;
-
-    const timer = window.setInterval(() => {
-      index += 1;
-      setDisplayedResponse(response.slice(0, index));
-
-      if (index >= response.length) {
-        window.clearInterval(timer);
-        setDisplayedResponse(response);
-        setIsTypingResponse(false);
-      }
-    }, 32);
+    void speak(response, {
+      onStart: () => {
+        if (!cancelled) setDisplayedResponse(response.slice(0, 1));
+      },
+      onProgress: (progress) => {
+        if (cancelled) return;
+        const normalizedProgress = Math.min(1, Math.max(0, progress));
+        const characterCount = Math.max(
+          1,
+          Math.ceil(response.length * normalizedProgress),
+        );
+        setDisplayedResponse(response.slice(0, characterCount));
+      },
+      onEnd: finishText,
+      onError: () => {
+        if (!cancelled) runFastTextOnlyAnimation();
+      },
+    });
 
     return () => {
-      window.clearInterval(timer);
+      cancelled = true;
+      if (fallbackTimer !== null) window.clearInterval(fallbackTimer);
     };
-  }, [response, shouldTypeResponse]);
+  }, [
+    isProcessing,
+    response,
+    shouldTypeResponse,
+    showStartupChecks,
+    speak,
+    startupMessage,
+    voiceEnabled,
+  ]);
 
   useEffect(() => {
     if (
+      !showStartupChecks ||
       !voiceEnabled ||
-      isProcessing ||
-      isTypingResponse ||
-      !response.trim() ||
-      response === startupMessage ||
-      lastSpokenResponseRef.current === response
+      startupBriefingLoading ||
+      !startupBriefing?.message ||
+      startupSpokenRef.current
     ) {
       return;
     }
 
-    lastSpokenResponseRef.current = response;
-    void speak(response);
+    pendingStartupSpeechRef.current =
+      `${startupBriefing.greeting}, Kaylee. ${startupBriefing.message}`;
   }, [
-    isProcessing,
-    isTypingResponse,
-    response,
-    speak,
-    startupMessage,
+    showStartupChecks,
+    startupBriefing,
+    startupBriefingLoading,
     voiceEnabled,
   ]);
 
@@ -2770,7 +2927,7 @@ function App() {
            <div className="title-group">
             <h1>A.L.F.R.E.D.</h1>
             <p className="subtitle">
-              Adaptive Learning Framework for Responsive Executive Decisions V.8
+              Adaptive Learning Framework for Responsive Executive Decisions V.9
             </p>
           </div>
 
@@ -2786,10 +2943,12 @@ function App() {
                     stopSpeaking();
                     return;
                   }
+
                   const nextEnabled = !voiceEnabled;
                   setVoiceEnabled(nextEnabled);
+
                   if (nextEnabled) {
-                    void unlockVoice();
+                    void activateVoice();
                   }
                 }}
                 aria-label={
@@ -2825,16 +2984,22 @@ function App() {
                 className="command-textarea"
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
+                onFocus={() => {
+                  void activateVoice();
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    submitCommand();
+                    void submitCommand();
                   }
                 }}
                 rows={1}
                 placeholder='Try: "show me my projects"'
               />
-              <button onClick={submitCommand} aria-label="Send command">
+              <button
+                onClick={() => void submitCommand()}
+                aria-label="Send command"
+              >
                 <Send size={18} />
               </button>
             </div>
@@ -2842,6 +3007,15 @@ function App() {
 
           <div className="response-console">
             <p className="panel-label">system response</p>
+            {showStartupChecks && !isProcessing && !projectExplorer && (
+              <StartupBriefing
+                briefing={startupBriefing}
+                loading={startupBriefingLoading}
+                error={startupBriefingError}
+                onAction={(commandText) => void submitCommand(commandText)}
+                onRefresh={() => void loadStartupBriefing()}
+              />
+            )}
             {showStartupChecks && !isProcessing && !projectExplorer && (
               <div className="system-check-grid">
                 {systemChecks.map((check) => (
@@ -2905,7 +3079,10 @@ function App() {
                     </>
                   ) : (
                     <ChatCalendarResponse
-                      response={(shouldTypeResponse ? displayedResponse : response) || "Ready when you are."}
+                      response={
+                        (shouldTypeResponse ? displayedResponse : response) ||
+                        (showStartupChecks ? "" : "Ready when you are.")
+                      }
                     />
                   )}
                 </div>
