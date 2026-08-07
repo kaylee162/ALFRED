@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import threading
 from typing import Any
 
 import requests
@@ -10,7 +11,11 @@ import requests
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:3b"
 DEFAULT_TIMEOUT = 60
-DEFAULT_CONNECT_TIMEOUT = 5
+DEFAULT_CONNECT_TIMEOUT = 2
+KEEP_ALIVE = "30m"
+SESSION = requests.Session()
+_HEALTH_CACHE_LOCK = threading.Lock()
+_HEALTH_CACHE: tuple[float, dict[str, object]] | None = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,7 +66,7 @@ def chat_with_ollama(
             "num_predict": num_predict,
             "temperature": temperature,
         },
-        "keep_alive": "10m",
+        "keep_alive": KEEP_ALIVE,
     }
 
     if tools:
@@ -73,7 +78,7 @@ def chat_with_ollama(
     started_at = time.perf_counter()
 
     try:
-        response = requests.post(
+        response = SESSION.post(
             OLLAMA_URL,
             json=payload,
             timeout=(DEFAULT_CONNECT_TIMEOUT, timeout),
@@ -206,10 +211,16 @@ def ollama_health(
     """
     Check whether Ollama is reachable and whether ALFRED's model is installed.
     """
+    global _HEALTH_CACHE
+    now = time.monotonic()
+    with _HEALTH_CACHE_LOCK:
+        if _HEALTH_CACHE and now - _HEALTH_CACHE[0] < 15:
+            return dict(_HEALTH_CACHE[1])
+
     tags_url = "http://localhost:11434/api/tags"
 
     try:
-        response = requests.get(
+        response = SESSION.get(
             tags_url,
             timeout=(2, timeout),
         )
@@ -284,3 +295,31 @@ def ollama_health(
             "models": [],
             "message": "Ollama returned an invalid health response.",
         }
+
+
+def warm_ollama() -> dict[str, object]:
+    """Load ALFRED's local model into memory before the first user command."""
+    started = time.perf_counter()
+    try:
+        chat_with_ollama(
+            [
+                {
+                    "role": "system",
+                    "content": "Reply with READY only.",
+                },
+                {
+                    "role": "user",
+                    "content": "Initialize.",
+                },
+            ],
+            temperature=0.0,
+            num_predict=2,
+            timeout=45,
+        )
+        elapsed = time.perf_counter() - started
+        LOGGER.info("Ollama warm-up complete in %.2fs", elapsed)
+        return {"ready": True, "seconds": round(elapsed, 3)}
+    except OllamaError as exc:
+        elapsed = time.perf_counter() - started
+        LOGGER.warning("Ollama warm-up failed after %.2fs: %s", elapsed, exc)
+        return {"ready": False, "seconds": round(elapsed, 3), "error": str(exc)}
